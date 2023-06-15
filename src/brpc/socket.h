@@ -292,11 +292,11 @@ public:
             , pipelined_count(0), auth_flags(0)
             , ignore_eovercrowded(false) {}
     };
-    int Write(butil::IOBuf *msg, const WriteOptions* options = NULL);
+    int Write(butil::IOBuf *msg, const WriteOptions* options = NULL, bool in_background = false);
 
     // Write an user-defined message. `msg' is released when Write() is
     // successful and *may* remain unchanged otherwise.
-    int Write(SocketMessagePtr<>& msg, const WriteOptions* options = NULL);
+    int Write(SocketMessagePtr<>& msg, const WriteOptions* options = NULL, bool in_background = false);
 
     // The file descriptor
     int fd() const { return _fd.load(butil::memory_order_relaxed); }
@@ -576,7 +576,7 @@ private:
     };
 
     int ConductError(bthread_id_t);
-    int StartWrite(WriteRequest*, const WriteOptions&);
+    int StartWrite(WriteRequest*, const WriteOptions&, bool in_background = false);
 
     int Dereference();
 friend void DereferenceSocket(Socket*);

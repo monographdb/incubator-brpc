@@ -1173,14 +1173,16 @@ void Controller::IssueRPC(int64_t start_realtime_us) {
     wopt.ignore_eovercrowded = has_flag(FLAGS_IGNORE_EOVERCROWDED);
     int rc;
     size_t packet_size = 0;
+    // For async RPC, write to socket in background bthread to avoid blocking current thread.
+    bool write_in_background = _done != nullptr;
     if (user_packet_guard) {
         if (span) {
             packet_size = user_packet_guard->EstimatedByteSize();
         }
-        rc = _current_call.sending_sock->Write(user_packet_guard, &wopt);
+        rc = _current_call.sending_sock->Write(user_packet_guard, &wopt, write_in_background);
     } else {
         packet_size = packet.size();
-        rc = _current_call.sending_sock->Write(&packet, &wopt);
+        rc = _current_call.sending_sock->Write(&packet, &wopt, write_in_background);
     }
     if (span) {
         if (_current_call.nretry == 0) {

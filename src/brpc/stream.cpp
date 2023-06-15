@@ -290,7 +290,9 @@ int Stream::AppendIfNotFull(const butil::IOBuf &data) {
 
     size_t data_length = data.length();
     butil::IOBuf copied_data(data);
-    const int rc = _fake_socket_weak_ref->Write(&copied_data);
+    // Always write stream message in background bthread to avoid blocking current thread.
+    bool write_in_background = true;
+    const int rc = _fake_socket_weak_ref->Write(&copied_data, nullptr, write_in_background);
     if (rc != 0) {
         // Stream may be closed by peer before
         LOG(WARNING) << "Fail to write to _fake_socket, " << berror();

@@ -1572,7 +1572,7 @@ X509* Socket::GetPeerCertificate() const {
     return SSL_get_peer_certificate(_ssl_session);
 }
 
-int Socket::Write(butil::IOBuf* data, const WriteOptions* options_in) {
+int Socket::Write(butil::IOBuf* data, const WriteOptions* options_in, bool in_background) {
     WriteOptions opt;
     if (options_in) {
         opt = *options_in;
@@ -1608,10 +1608,10 @@ int Socket::Write(butil::IOBuf* data, const WriteOptions* options_in) {
     req->id_wait = opt.id_wait;
     req->set_pipelined_count_and_user_message(
         opt.pipelined_count, DUMMY_USER_MESSAGE, opt.auth_flags);
-    return StartWrite(req, opt);
+    return StartWrite(req, opt, in_background);
 }
 
-int Socket::Write(SocketMessagePtr<>& msg, const WriteOptions* options_in) {
+int Socket::Write(SocketMessagePtr<>& msg, const WriteOptions* options_in, bool in_background) {
     WriteOptions opt;
     if (options_in) {
         opt = *options_in;
@@ -1643,10 +1643,10 @@ int Socket::Write(SocketMessagePtr<>& msg, const WriteOptions* options_in) {
     req->next = WriteRequest::UNCONNECTED;
     req->id_wait = opt.id_wait;
     req->set_pipelined_count_and_user_message(opt.pipelined_count, msg.release(), opt.auth_flags);
-    return StartWrite(req, opt);
+    return StartWrite(req, opt, in_background);
 }
 
-int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
+int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt, bool in_background) {
     // Release fence makes sure the thread getting request sees *req
     WriteRequest* const prev_head =
         _write_head.exchange(req, butil::memory_order_release);
@@ -1685,7 +1685,7 @@ int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
     // in some protocols(namely RTMP).
     req->Setup(this);
     
-    if (ssl_state() != SSL_OFF) {
+    if (in_background || ssl_state() != SSL_OFF) {
         // Writing into SSL may block the current bthread, always write
         // in the background.
         goto KEEPWRITE_IN_BACKGROUND;
