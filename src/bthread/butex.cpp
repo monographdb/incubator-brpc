@@ -95,6 +95,7 @@ struct ButexWaiter : public butil::LinkNode<ButexWaiter> {
 // Butex::waiters.
 struct ButexBthreadWaiter : public ButexWaiter {
     TaskMeta* task_meta;
+    TaskGroup* task_group;
     TimerThread::TaskId sleep_id;
     WaiterState waiter_state;
     int expected_value;
@@ -312,7 +313,11 @@ int butex_wake(void* arg, bool nosignal) {
     }
     ButexBthreadWaiter* bbw = static_cast<ButexBthreadWaiter*>(front);
     unsleep_if_necessary(bbw, get_global_timer_thread());
-    TaskGroup* g = get_task_group(bbw->control, nosignal);
+    // push the task back to the task group it belongs to
+    TaskGroup* g = bbw->task_group;
+    if (g == NULL) {
+        g = get_task_group(bbw->control, nosignal);
+    }
     if (g == tls_task_group) {
         run_in_local_task_group(g, bbw->tid, nosignal);
     } else {
@@ -651,6 +656,7 @@ int butex_wait(void* arg, int expected_value, const timespec* abstime) {
     bbw.tid = g->current_tid();
     bbw.container.store(NULL, butil::memory_order_relaxed);
     bbw.task_meta = g->current_task();
+    bbw.task_group = g;
     bbw.sleep_id = 0;
     bbw.waiter_state = WAITER_STATE_READY;
     bbw.expected_value = expected_value;
