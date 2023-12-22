@@ -145,8 +145,10 @@ int DomainNamingService::GetServers(const char* dns_name,
         return -1;
     }
     if (result == NULL) {
-        LOG(WARNING) << "result of gethostbyname_r is NULL";
-        return -1;
+      LOG(WARNING) << "result of gethostbyname_r is NULL, herror= "
+                   << hstrerror(error) << ", host name " << buf << ", dns "
+                   << dns_name;
+      return -1;
     }
 #endif
 
