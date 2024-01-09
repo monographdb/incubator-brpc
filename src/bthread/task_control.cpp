@@ -362,6 +362,10 @@ bool TaskControl::steal_task(bthread_t* tid, size_t* seed, size_t offset) {
         TaskGroup* g = _groups[s % ngroup];
         // g is possibly NULL because of concurrent _destroy_group
         if (g) {
+            if (g->pop_resume_task(tid)) {
+                stolen = true;
+                break;
+            }
             if (g->_rq.steal(tid)) {
                 stolen = true;
                 break;
@@ -376,10 +380,29 @@ bool TaskControl::steal_task(bthread_t* tid, size_t* seed, size_t offset) {
     return stolen;
 }
 
+bvar::Adder<int64_t> signal_task_skip_cnt;
+bvar::PerSecond<bvar::Adder<int64_t>> signal_task_skip_ps(
+        "signal_task_skip_signal_task_per_second",
+        &signal_task_skip_cnt, 2);
 void TaskControl::signal_task(int num_task) {
     if (num_task <= 0) {
+        signal_task_skip_cnt << 1;
         return;
     }
+    if (ParkingLot::_waiting_worker_count.load(butil::memory_order_acquire) == 0) {
+        if (FLAGS_bthread_min_concurrency > 0 &&
+            _concurrency.load(butil::memory_order_relaxed) < FLAGS_bthread_concurrency) {
+            // Add worker if all workers are busy and FLAGS_bthread_concurrency is
+            // not reached.
+            BAIDU_SCOPED_LOCK(g_task_control_mutex);
+            if (_concurrency.load(butil::memory_order_acquire) < FLAGS_bthread_concurrency) {
+                add_workers(1);
+            }
+        }
+        signal_task_skip_cnt << 1;
+        return;
+    }
+
     // TODO(gejun): Current algorithm does not guarantee enough threads will
     // be created to match caller's requests. But in another side, there's also
     // many useless signalings according to current impl. Capping the concurrency
@@ -432,7 +455,7 @@ void TaskControl::print_resume_q_sizes(std::ostream &os) {
         // ngroup > _ngroup: nums[_ngroup ... ngroup-1] = 0
         // ngroup < _ngroup: just ignore _groups[_ngroup ... ngroup-1]
         for (size_t i = 0; i < ngroup; ++i) {
-            nums[i] = (_groups[i] ? _groups[i]->_resume_rq_cnt->load(std::memory_order_relaxed) : 0);
+            nums[i] = (_groups[i] ? _groups[i]->_resume_rq_cnt.load(std::memory_order_relaxed) : 0);
         }
     }
     for (size_t i = 0; i < ngroup; ++i) {

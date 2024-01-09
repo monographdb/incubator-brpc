@@ -116,17 +116,23 @@ bool TaskGroup::is_stopped(bthread_t tid) {
 }
 
 bool TaskGroup::wait_task(bthread_t* tid) {
+    int64_t poll_start_ms = butil::cpuwide_time_ms();
     do {
 #ifndef BTHREAD_DONT_SAVE_PARKING_STATE
         if (_last_pl_state.stopped()) {
             return false;
         }
 
-        if (pop_resume_task(tid)) {
+        if (pop_resume_task(tid) || steal_task(tid)) {
             return true;
         }
 
-        _pl->wait(_last_pl_state);
+        // keep polling for some time before waiting on parking lot
+        if (butil::cpuwide_time_ms() - poll_start_ms > 15) {
+            _pl->wait(_last_pl_state);
+            poll_start_ms = butil::cpuwide_time_ms();
+        }
+
         if (steal_task(tid)) {
             return true;
         }
@@ -197,9 +203,9 @@ TaskGroup::TaskGroup(TaskControl* c)
 #ifndef NDEBUG
     , _sched_recursive_guard(0)
 #endif
-    , _resume_rq_cnt(ResumeRunQueue::Instance().first)
-    , _resume_rq(ResumeRunQueue::Instance().second)
-    , _resume_consumer_token(*_resume_rq)
+    , _resume_rq_cnt(0)
+    , _resume_rq(1000)
+    , _resume_consumer_token(_resume_rq)
 {
     _steal_seed = butil::fast_rand();
     _steal_offset = OFFSET_TABLE[_steal_seed % ARRAY_SIZE(OFFSET_TABLE)];
@@ -565,7 +571,7 @@ void TaskGroup::ending_sched(TaskGroup** pg) {
 void TaskGroup::sched(TaskGroup** pg) {
     TaskGroup* g = *pg;
     bthread_t next_tid = 0;
-    
+
     if (!g->pop_resume_task(&next_tid)) {
         // Find next task to run, if none, switch to idle thread of the group.
 #ifndef BTHREAD_FAIR_WSQ
@@ -666,7 +672,7 @@ void TaskGroup::destroy_self() {
 
 void TaskGroup::ready_to_run(bthread_t tid, bool nosignal) {
     push_rq(tid);
-    if (nosignal || ParkingLot::_waiting_worker_count == 0) {
+    if (nosignal) {
         ++_num_nosignal;
     } else {
         const int additional_signal = _num_nosignal;
@@ -690,7 +696,7 @@ void TaskGroup::ready_to_run_remote(bthread_t tid, bool nosignal) {
         LOG_EVERY_SECOND(ERROR) << "push_resume_rq fail";
         ::usleep(1000);
     }
-    if (nosignal || ParkingLot::_waiting_worker_count == 0) {
+    if (nosignal) {
         ++_remote_num_nosignal;
     } else {
         const int additional_signal = _remote_num_nosignal;
