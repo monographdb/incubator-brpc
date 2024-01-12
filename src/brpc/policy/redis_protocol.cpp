@@ -75,10 +75,37 @@ public:
     bool in_transaction;
     // >0 if command handler is run in batched mode.
     int batched_size;
+    // Keep track of scan cursor.
+    std::unordered_map<std::string, std::string> scan_cursors;
+    // Use to kick off the scan cursor, only remember the recent 10 cursors.
+    std::list<std::string> scan_cursor_list;
 
     RedisCommandParser parser;
     butil::Arena arena;
 };
+
+
+void ReplaceAndStoreCursor(RedisConnContext* ctx, RedisReply& output) {
+    auto cursor = output[0].data();
+    if (cursor == "0") {
+        return;
+    }
+
+    // use FNV-1a to convert the cursor to uint64
+    uint64_t hash = 14695981039346656037ULL;
+    for (size_t i = 0; i < cursor.size(); ++i) {
+        hash ^= cursor[i];
+        hash *= 1099511628211ULL;
+    }
+    std::string hash_str = std::to_string(hash);
+    ctx->scan_cursors[hash_str] = cursor.as_string();
+    ctx->scan_cursor_list.push_back(hash_str);
+    if (ctx->scan_cursor_list.size() > 10) {
+        ctx->scan_cursors.erase(ctx->scan_cursor_list.front());
+        ctx->scan_cursor_list.pop_front();
+    }
+    output[0].SetString(hash_str);
+}
 
 int ConsumeCommand(RedisConnContext* ctx,
                    const std::vector<butil::StringPiece>& args,
@@ -109,6 +136,69 @@ int ConsumeCommand(RedisConnContext* ctx,
             if (result == REDIS_CMD_BATCHED) {
                 LOG(ERROR) << "BATCHED should not be returned by a transaction handler.";
                 return -1;
+            }
+        }
+    }
+    else if (args[0] == "scan") {
+        // find the cursor param
+        if (args.size() < 2) {
+            output.SetError("ERR wrong number of arguments for 'scan' command");
+            output.SerializeTo(appender);
+            return 0;
+        }
+        auto cursor_uint64 = args[1];
+        auto iterator = ctx->scan_cursors.find(cursor_uint64.as_string());
+        std::vector<butil::StringPiece> mut_args;
+        for (auto& arg : args) {
+            mut_args.push_back(arg);
+        }
+        if (cursor_uint64 == "0") {
+        } else if (iterator != ctx->scan_cursors.end()) {
+            // cursor found, use the value
+            mut_args[1] = iterator->second;
+        } else {
+            // cursor not found, return corrutped cursor error
+            output.SetArray(2);
+            output[0].SetString("-1");
+            output[1].SetArray(0);
+            output.SerializeTo(appender);
+            return 0;
+        }
+        // run the command
+        RedisCommandHandler* ch = ctx->redis_service->FindCommandHandler("scan");
+        if (!ch) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "ERR unknown command `%s`", args[0].as_string().c_str());
+            output.SetError(buf);
+        }
+        else {
+            result = ch->Run(mut_args, &output, flush_batched);
+            if (result == REDIS_CMD_CONTINUE) {
+                if (ctx->batched_size != 0) {
+                    LOG(ERROR) << "CONTINUE should not be returned in a batched process.";
+                    return -1;
+                }
+                if (ctx->transaction_handler == nullptr) {
+                    ctx->transaction_handler.reset(ctx->redis_service->NewTransactionHandler());
+                }
+                if (ctx->transaction_handler != nullptr) {
+                    ctx->transaction_handler->Begin();
+                    ctx->in_transaction = true;
+                }
+                else {
+                    output.SetError("ERR Transaction not supported.");
+                }
+            }
+            else if (result == REDIS_CMD_HANDLED) {
+                if (!output.is_error()) {
+                    // save the cursor
+                   ReplaceAndStoreCursor(ctx, output);
+                }
+                output.SerializeTo(appender);
+                return 0;
+            }
+            else if (result == REDIS_CMD_BATCHED) {
+                ctx->batched_size++;
             }
         }
     }
