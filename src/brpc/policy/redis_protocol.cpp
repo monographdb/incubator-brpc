@@ -142,6 +142,8 @@ int ConsumeCommand(RedisConnContext* ctx,
         }
     }
     if (result == REDIS_CMD_HANDLED) {
+        ctx->transaction_handler = nullptr;
+        ctx->in_transaction = false;
         if (ctx->batched_size) {
             if ((int)output.size() != (ctx->batched_size + 1)) {
                 LOG(ERROR) << "reply array size can't be matched with batched size, "
