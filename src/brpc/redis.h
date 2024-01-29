@@ -222,6 +222,7 @@ std::ostream& operator<<(std::ostream& os, const RedisResponse&);
 
 class RedisCommandHandler;
 class TransactionHandler;
+class RedisUserAuthContext;
 
 // Container of CommandHandlers.
 // Assign an instance to ServerOption.redis_service to enable redis support. 
@@ -234,6 +235,19 @@ public:
 
     // Create a transaction handler to handle commands inside a transaction.
     virtual TransactionHandler* NewTransactionHandler() const;
+
+    // Check whether requirepass configuration field has been set.
+    virtual bool RequirePass() const;
+
+    // Check the username and password pair and return true if they are valid,
+    // otherwise false is returned and errno is set to:
+    //
+    // Successfull authentication should set authenticated flag of ctx.
+    virtual bool AuthenticateUser(RedisUserAuthContext* ctx,
+            const butil::StringPiece& username, const butil::StringPiece& password) const;
+
+    // Check whether authentication is required for the command.
+    virtual bool AuthRequired(const RedisUserAuthContext* ctx, const butil::StringPiece& command) const;
 
     // This function should not be touched by user and used by brpc deverloper only.
     RedisCommandHandler* FindCommandHandler(const butil::StringPiece& name) const;
@@ -298,6 +312,27 @@ public:
 class TransactionHandler : public RedisCommandHandler {
 public:
     virtual bool Begin() = 0;
+};
+
+// Context for authentication. Currently, it holds the authenticated field merely.
+// Later versions may support ACL, and user-related fields may put into it.
+class RedisUserAuthContext
+{
+public:
+    RedisUserAuthContext(): authenticated(false) {}
+
+    void SetAuthenticated()
+    {
+        authenticated = true;
+    }
+
+    bool GetAuthenticated() const
+    {
+        return authenticated;
+    }
+
+private:
+    bool authenticated;
 };
 
 } // namespace brpc

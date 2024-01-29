@@ -60,6 +60,7 @@ public:
     explicit RedisConnContext(const RedisService* rs)
         : redis_service(rs)
         , in_transaction(false)
+        , user_auth_ctx()
         , batched_size(0) {}
 
     ~RedisConnContext();
@@ -73,6 +74,9 @@ public:
     // Whether this connection has begun a transaction. If true, the commands
     // received will be handled by transaction_handler.
     bool in_transaction;
+
+    RedisUserAuthContext user_auth_ctx;
+
     // >0 if command handler is run in batched mode.
     int batched_size;
 
@@ -97,6 +101,40 @@ int ConsumeCommand(RedisConnContext* ctx,
             return -1;
         }
     }
+    else if (args[0] == "auth") {
+        if (args.size() == 1)
+        {
+            output.SetError("ERR wrong number of arguments for 'auth' command");
+        }
+        else if (args.size() > 3)
+        {
+            output.SetError("ERR syntax error");
+        }
+        else
+        {
+            if (args.size() == 2 && !ctx->redis_service->RequirePass())
+            {
+                // Mimic the old behavior of giving an error for the two argument form if no password is configured.
+                output.SetError("AUTH <password> called without any password "
+                                "configured for the default user. Are you sure "
+                                "your configuration is correct?");
+            }
+            else
+            {
+                butil::StringPiece username= args.size() == 2 ? "default" : args[1];
+                butil::StringPiece password= args.back();
+                if (ctx->redis_service->AuthenticateUser(
+                            &ctx->user_auth_ctx, username, password))
+                {
+                    output.SetStatus("OK");
+                }
+                else
+                {
+                    output.SetError("WRONGPASS invalid username-password pair or user is disabled.");
+                }
+            }
+        }
+    }
     else if (args[0] == "watch" || args[0] == "unwatch") {
         if (!ctx->transaction_handler) {
             ctx->transaction_handler.reset(ctx->redis_service->NewTransactionHandler());
@@ -116,30 +154,37 @@ int ConsumeCommand(RedisConnContext* ctx,
         }
     }
     else {
-        RedisCommandHandler* ch = ctx->redis_service->FindCommandHandler(args[0]);
-        if (!ch) {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "ERR unknown command `%s`", args[0].as_string().c_str());
-            output.SetError(buf);
-        } else {
-            result = ch->Run(args, &output, flush_batched);
-            if (result == REDIS_CMD_CONTINUE) {
-                if (ctx->batched_size != 0) {
-                    LOG(ERROR) << "CONTINUE should not be returned in a batched process.";
-                    return -1;
+        if (ctx->redis_service->AuthRequired(&ctx->user_auth_ctx, args[0]))
+        {
+            output.SetError("NOAUTH Authentication required.");
+        }
+        else
+        {
+            RedisCommandHandler* ch = ctx->redis_service->FindCommandHandler(args[0]);
+            if (!ch) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "ERR unknown command `%s`", args[0].as_string().c_str());
+                output.SetError(buf);
+            } else {
+                result = ch->Run(args, &output, flush_batched);
+                if (result == REDIS_CMD_CONTINUE) {
+                    if (ctx->batched_size != 0) {
+                        LOG(ERROR) << "CONTINUE should not be returned in a batched process.";
+                        return -1;
+                    }
+                    if (ctx->transaction_handler == nullptr) {
+                        ctx->transaction_handler.reset(ctx->redis_service->NewTransactionHandler());
+                    }
+                    if (ctx->transaction_handler != nullptr) {
+                        ctx->transaction_handler->Begin();
+                        ctx->in_transaction = true;
+                    }
+                    else {
+                        output.SetError("ERR Transaction not supported.");
+                    }
+                } else if (result == REDIS_CMD_BATCHED) {
+                    ctx->batched_size++;
                 }
-                if (ctx->transaction_handler == nullptr) {
-                    ctx->transaction_handler.reset(ctx->redis_service->NewTransactionHandler());
-                }
-                if (ctx->transaction_handler != nullptr) {
-                    ctx->transaction_handler->Begin();
-                    ctx->in_transaction = true;
-                }
-                else {
-                    output.SetError("ERR Transaction not supported.");
-                }
-            } else if (result == REDIS_CMD_BATCHED) {
-                ctx->batched_size++;
             }
         }
     }
