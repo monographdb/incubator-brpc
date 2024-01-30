@@ -20,6 +20,22 @@
 #include "brpc/details/has_epollrdhup.h"
 #endif
 
+#include "bthread/task_control.h"
+
+extern "C" {
+extern void bthread_flush();
+};
+
+namespace bthread {
+extern __thread int tls_dest_task_group_start;
+extern __thread int tls_dest_task_group_end;
+DECLARE_int32(bthread_concurrency);
+
+extern TaskControl* get_or_new_task_control();
+}
+
+
+
 namespace brpc {
 
 EventDispatcher::EventDispatcher()
@@ -73,6 +89,10 @@ int EventDispatcher::Start(const bthread_attr_t* consumer_thread_attr) {
     _consumer_thread_attr = (consumer_thread_attr  ?
                              *consumer_thread_attr : BTHREAD_ATTR_NORMAL);
 
+    _thd = std::thread(RunThis, this);
+    _tid = 1;
+    return 0;
+
     //_consumer_thread_attr is used in StartInputEvent(), assign flag NEVER_QUIT to it will cause new bthread
     // that created by epoll_wait() never to quit.
     bthread_attr_t epoll_thread_attr = _consumer_thread_attr | BTHREAD_NEVER_QUIT;
@@ -105,6 +125,9 @@ void EventDispatcher::Stop() {
 }
 
 void EventDispatcher::Join() {
+    _thd.join();
+    _tid = 0;
+    return;
     if (_tid) {
         bthread_join(_tid, NULL);
         _tid = 0;
@@ -187,11 +210,32 @@ int EventDispatcher::RemoveConsumer(int fd) {
     return 0;
 }
 
+std::atomic<int> event_dispatcher_num{0};
+
 void* EventDispatcher::RunThis(void* arg) {
+    int old_num = event_dispatcher_num.load();
+    while (!event_dispatcher_num.compare_exchange_strong(old_num, old_num+1)) {
+    }
+//    bthread::TaskControl *control = bthread::get_or_new_task_control();
+//    int concurrency = control->concurrency();
+    int concurrency = bthread::FLAGS_bthread_concurrency;
+    int avg = concurrency / FLAGS_event_dispatcher_num;
+    int remain = concurrency % FLAGS_event_dispatcher_num;
+    bthread::tls_dest_task_group_start = avg * old_num;
+    bthread::tls_dest_task_group_end = avg * old_num + avg;
+    if (old_num < remain) {
+        bthread::tls_dest_task_group_start += old_num;
+        bthread::tls_dest_task_group_end += old_num + 1;
+    } else {
+        bthread::tls_dest_task_group_start += remain;
+        bthread::tls_dest_task_group_end += remain;
+    }
+    LOG(INFO) << old_num << ", " << bthread::tls_dest_task_group_start << ", " << bthread::tls_dest_task_group_end;
     ((EventDispatcher*)arg)->Run();
     return NULL;
 }
 
+inline bvar::LatencyRecorder epoll_wait_lr("a_", "epoll_wait_return");
 void EventDispatcher::Run() {
     while (!_stop) {
         epoll_event e[32];
@@ -204,6 +248,7 @@ void EventDispatcher::Run() {
 #else
         const int n = epoll_wait(_epfd, e, ARRAY_SIZE(e), -1);
 #endif
+        epoll_wait_lr << n;
         if (_stop) {
             // epoll_ctl/epoll_wait should have some sort of memory fencing
             // guaranteeing that we(after epoll_wait) see _stop set before
@@ -229,6 +274,8 @@ void EventDispatcher::Run() {
                                         _consumer_thread_attr);
             }
         }
+        // flush added bthreads
+//        bthread_flush();
         for (int i = 0; i < n; ++i) {
             if (e[i].events & (EPOLLOUT | EPOLLERR | EPOLLHUP)) {
                 // We don't care about the return value.

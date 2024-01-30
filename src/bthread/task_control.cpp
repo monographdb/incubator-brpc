@@ -216,7 +216,22 @@ int TaskControl::add_workers(int num) {
     return _concurrency.load(butil::memory_order_relaxed) - old_concurency;
 }
 
+
+// The TaskGroup range for ready_to_run_remote to choose destination task group from.
+__thread int tls_dest_task_group_start;
+__thread int tls_dest_task_group_end;
+
 TaskGroup* TaskControl::choose_one_group() {
+    if (tls_dest_task_group_start || tls_dest_task_group_end) {
+        size_t group = tls_dest_task_group_start + butil::fast_rand_less_than(tls_dest_task_group_end - tls_dest_task_group_start);
+        if (group < tls_dest_task_group_start || group >= tls_dest_task_group_end) {
+            LOG(ERROR) << "group out of range";
+        }
+        const size_t ngroup = _ngroup.load(butil::memory_order_acquire);
+        if (ngroup != 0) {
+            return _groups[group];
+        }
+    }
     const size_t ngroup = _ngroup.load(butil::memory_order_acquire);
     if (ngroup != 0) {
         return _groups[butil::fast_rand_less_than(ngroup)];

@@ -122,6 +122,13 @@ bool TaskGroup::wait_task(bthread_t* tid) {
         if (_last_pl_state.stopped()) {
             return false;
         }
+//        if (steal_task(tid)) {
+//            return true;
+//        }
+//        else
+//        {
+//            // exteral
+//        }
         // keep polling for some time before waiting on parking lot
         if (butil::cpuwide_time_ms() - poll_start_ms > 15) {
             _pl->wait(_last_pl_state);
@@ -418,6 +425,8 @@ int TaskGroup::start_foreground(TaskGroup** pg,
     return 0;
 }
 
+// TODO(zkl): check why start_background from EventDispatcher and TxProcessor differs so much
+inline bvar::LatencyRecorder e_disp_start_background("aa_", "e_disp_start_background");
 template <bool REMOTE>
 int TaskGroup::start_background(bthread_t* __restrict th,
                                 const bthread_attr_t* __restrict attr,
@@ -675,37 +684,61 @@ void TaskGroup::flush_nosignal_tasks() {
         _control->signal_task(val);
     }
 }
+inline bvar::LatencyRecorder ready_to_run_remote_l("a_", "ready_to_run_remote_latency_us");
 
+//inline bvar::LatencyRecorder ready_to_run_remote_lr("a_", "ready_to_run_remote");
 void TaskGroup::ready_to_run_remote(bthread_t tid, bool nosignal) {
-    _remote_rq._mutex.lock();
-    while (!_remote_rq.push_locked(tid)) {
+    auto start_us = butil::cpuwide_time_us();
+//    ready_to_run_remote_lr << 1;
+    while (!_remote_rq.push(tid)) {
         flush_nosignal_tasks_remote_locked(_remote_rq._mutex);
         LOG_EVERY_SECOND(ERROR) << "_remote_rq is full, capacity="
                                 << _remote_rq.capacity();
         ::usleep(1000);
-        _remote_rq._mutex.lock();
     }
     if (nosignal) {
-        ++_remote_num_nosignal;
-        _remote_rq._mutex.unlock();
+        _remote_num_nosignal.fetch_add(1, std::memory_order_release);
+//        ++_remote_num_nosignal;
     } else {
-        const int additional_signal = _remote_num_nosignal;
-        _remote_num_nosignal = 0;
-        _remote_nsignaled += 1 + additional_signal;
-        _remote_rq._mutex.unlock();
+        const int additional_signal =_remote_num_nosignal.load(std::memory_order_acquire);
+        _remote_num_nosignal.store(0, std::memory_order_release);
+        _remote_nsignaled.fetch_add(additional_signal, std::memory_order_release);
         _control->signal_task(1 + additional_signal);
     }
+//        ready_to_run_remote_l << butil::cpuwide_time_us() - start_us;
 }
+//void TaskGroup::ready_to_run_remote(bthread_t tid, bool nosignal) {
+//    _remote_rq._mutex.lock();
+//    while (!_remote_rq.push_locked(tid)) {
+//        flush_nosignal_tasks_remote_locked(_remote_rq._mutex);
+//        LOG_EVERY_SECOND(ERROR) << "_remote_rq is full, capacity="
+//                                << _remote_rq.capacity();
+//        ::usleep(1000);
+//        _remote_rq._mutex.lock();
+//    }
+//    if (nosignal) {
+//        ++_remote_num_nosignal;
+//        _remote_rq._mutex.unlock();
+//    } else {
+//        const int additional_signal = _remote_num_nosignal;
+//        _remote_num_nosignal = 0;
+//        _remote_nsignaled += 1 + additional_signal;
+//        _remote_rq._mutex.unlock();
+//        _control->signal_task(1 + additional_signal);
+//    }
+//}
 
 void TaskGroup::flush_nosignal_tasks_remote_locked(butil::Mutex& locked_mutex) {
-    const int val = _remote_num_nosignal;
+    const int val = _remote_num_nosignal.load(std::memory_order_acquire);
     if (!val) {
-        locked_mutex.unlock();
+//        locked_mutex.unlock();
         return;
     }
-    _remote_num_nosignal = 0;
-    _remote_nsignaled += val;
-    locked_mutex.unlock();
+    _remote_num_nosignal.store(0);
+    _remote_nsignaled.fetch_add(val);
+//    _remote_num_nosignal = 0;
+//    _remote_nsignaled += val;
+//    locked_mutex.unlock();
     _control->signal_task(val);
 }
 

@@ -215,6 +215,7 @@ friend class TaskControl;
         if (_remote_rq.pop(tid)) {
             return true;
         }
+        // here external
 #ifndef BTHREAD_DONT_SAVE_PARKING_STATE
         _last_pl_state = _pl->get_state();
 #endif
@@ -244,9 +245,9 @@ friend class TaskControl;
     ContextualStack* _main_stack;
     bthread_t _main_tid;
     WorkStealingQueue<bthread_t> _rq;
-    RemoteTaskQueue _remote_rq;
-    int _remote_num_nosignal;
-    int _remote_nsignaled;
+    RemoteQueue _remote_rq;
+    std::atomic<int> _remote_num_nosignal{0};
+    std::atomic<int> _remote_nsignaled{0};
 
     int _sched_recursive_guard;
 };
