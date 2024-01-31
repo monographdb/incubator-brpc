@@ -30,8 +30,6 @@ namespace bthread {
 extern __thread int tls_dest_task_group_start;
 extern __thread int tls_dest_task_group_end;
 DECLARE_int32(bthread_concurrency);
-
-extern TaskControl* get_or_new_task_control();
 }
 
 
@@ -216,8 +214,6 @@ void* EventDispatcher::RunThis(void* arg) {
     int old_num = event_dispatcher_num.load();
     while (!event_dispatcher_num.compare_exchange_strong(old_num, old_num+1)) {
     }
-//    bthread::TaskControl *control = bthread::get_or_new_task_control();
-//    int concurrency = control->concurrency();
     int concurrency = bthread::FLAGS_bthread_concurrency;
     int avg = concurrency / FLAGS_event_dispatcher_num;
     int remain = concurrency % FLAGS_event_dispatcher_num;

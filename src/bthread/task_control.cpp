@@ -40,6 +40,9 @@ DEFINE_int32(task_group_runqueue_capacity, 4096,
 DEFINE_int32(task_group_yield_before_idle, 0,
              "TaskGroup yields so many times before idle");
 
+std::function<
+        std::pair<std::function<void()>, std::function<void(int16_t)>>(int16_t)> get_tx_proc_functors;
+
 namespace bthread {
 
 DECLARE_int32(bthread_concurrency);
@@ -69,9 +72,22 @@ void* TaskControl::worker_thread(void* arg) {
         LOG(ERROR) << "Fail to create TaskGroup in pthread=" << pthread_self();
         return NULL;
     }
+    int task_group_id = c->_next_worker_id.fetch_add(1, butil::memory_order_relaxed);
     std::string worker_thread_name = butil::string_printf(
         "brpc_worker:%d",
-        c->_next_worker_id.fetch_add(1, butil::memory_order_relaxed));
+        task_group_id);
+
+    LOG(INFO) << "setting extern function for task group: " << task_group_id;
+    if (get_tx_proc_functors != nullptr) {
+        auto functors = get_tx_proc_functors(task_group_id);
+        LOG(INFO) << "Set tx_pro_exec and update_ext_pro func for task group: " << task_group_id;
+        g->tx_processor_exec_ = functors.first;
+        g->update_ext_proc_ = functors.second;
+        (g->update_ext_proc_)(1);
+    } else {
+        LOG(INFO) << "get_tx_proc_functors is empty, skip setting tx_pro_exec and update_ext_pro";
+    }
+
     butil::PlatformThread::SetName(worker_thread_name.c_str());
     BT_VLOG << "Created worker=" << pthread_self()
             << " bthread=" << g->main_tid();
@@ -105,6 +121,7 @@ TaskGroup* TaskControl::create_group() {
         delete g;
         return NULL;
     }
+    LOG(INFO) << "create group";
     return g;
 }
 
@@ -145,6 +162,7 @@ TaskControl::TaskControl()
     , _status(print_rq_sizes_in_the_tc, this)
     , _nbthreads("bthread_count")
 {
+    LOG(INFO) << "New TaskControl";
     // calloc shall set memory to zero
     CHECK(_groups) << "Fail to create array of groups";
 }
@@ -159,6 +177,7 @@ int TaskControl::init(int concurrency) {
         return -1;
     }
     _concurrency = concurrency;
+    LOG(INFO) << "init TaskControl";
 
     // Make sure TimerThread is ready.
     if (get_or_create_global_timer_thread() == NULL) {

@@ -182,6 +182,9 @@ public:
     // process make go on indefinitely.
     void push_rq(bthread_t tid);
 
+    std::function<void()> tx_processor_exec_{nullptr};
+    std::function<void(int16_t)> update_ext_proc_{nullptr};
+
 private:
 friend class TaskControl;
 
@@ -216,6 +219,9 @@ friend class TaskControl;
             return true;
         }
         // here external
+        if (tx_processor_exec_ != nullptr) {
+            tx_processor_exec_();
+        }
 #ifndef BTHREAD_DONT_SAVE_PARKING_STATE
         _last_pl_state = _pl->get_state();
 #endif
