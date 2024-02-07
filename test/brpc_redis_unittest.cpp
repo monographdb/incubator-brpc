@@ -921,7 +921,7 @@ public:
     }
 
     brpc::ConnectionContext* NewConnectionContext() const override {
-        return nullptr;
+        return new RedisConnectionContext;
     }
 
     brpc::RedisCommandHandlerResult DispatchCommand(brpc::ConnectionContext* conn_ctx,
