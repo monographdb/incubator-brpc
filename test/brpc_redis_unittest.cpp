@@ -816,8 +816,6 @@ class MultiTransactionHandler;
 class RedisConnectionContext : public brpc::ConnectionContext
 {
 public:
-    ~RedisConnectionContext() override;
-
     // If user starts a transaction, transaction_handler indicates the
     // handler pointer that runs the transaction command.
     std::unique_ptr<MultiTransactionHandler> transaction_handler;
@@ -1005,10 +1003,6 @@ public:
                     {
                         output->SetError("ERR Transaction not supported.");
                     }
-                }
-                else
-                {
-                    assert(result == brpc::REDIS_CMD_HANDLED);
                 }
             }
         }
