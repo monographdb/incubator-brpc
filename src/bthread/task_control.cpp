@@ -83,6 +83,7 @@ void* TaskControl::worker_thread(void* arg) {
         LOG(INFO) << "Set tx_pro_exec and update_ext_pro func for task group: " << task_group_id;
         g->tx_processor_exec_ = functors.first;
         g->update_ext_proc_ = functors.second;
+        g->group_id = task_group_id;
         (g->update_ext_proc_)(1);
     } else {
         LOG(INFO) << "get_tx_proc_functors is empty, skip setting tx_pro_exec and update_ext_pro";
@@ -177,7 +178,7 @@ int TaskControl::init(int concurrency) {
         return -1;
     }
     _concurrency = concurrency;
-    LOG(INFO) << "init TaskControl";
+    LOG(INFO) << "init TaskControl, concurrency: " << _concurrency.load();
 
     // Make sure TimerThread is ready.
     if (get_or_create_global_timer_thread() == NULL) {

@@ -137,7 +137,13 @@ bool TaskGroup::wait_task(bthread_t* tid) {
             poll_start_ms = butil::cpuwide_time_ms();
         }
         if (steal_task(tid)) {
+            ++busy_rnd_;
             return true;
+        }
+        else 
+        {
+            ExecuteTxService();
+            busy_rnd_ = 0;
         }
 #else
         const ParkingLot::State st = _pl->get_state();
@@ -591,6 +597,13 @@ void TaskGroup::sched_to(TaskGroup** pg, TaskMeta* next_meta) {
                    << ") call sched_to(" << g << ")";
     }
 #endif
+    if (g->busy_rnd_ >= 1)
+    {
+        g->ExecuteTxService();
+        g->busy_rnd_ = 0;
+    }
+    ++g->busy_rnd_;
+
     // Save errno so that errno is bthread-specific.
     const int saved_errno = errno;
     void* saved_unique_user_ptr = tls_unique_user_ptr;

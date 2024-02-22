@@ -29,6 +29,7 @@
 #include "bthread/remote_task_queue.h"             // RemoteTaskQueue
 #include "butil/resource_pool.h"                    // ResourceId
 #include "bthread/parking_lot.h"
+#include <functional>
 
 namespace bthread {
 
@@ -185,6 +186,9 @@ public:
     std::function<void()> tx_processor_exec_{nullptr};
     std::function<void(int16_t)> update_ext_proc_{nullptr};
 
+    int group_id{};
+    uint8_t busy_rnd_{0};
+
 private:
 friend class TaskControl;
 
@@ -218,14 +222,24 @@ friend class TaskControl;
         if (_remote_rq.pop(tid)) {
             return true;
         }
-        // here external
-        if (tx_processor_exec_ != nullptr) {
-            tx_processor_exec_();
-        }
+//         // here external
+//         if (tx_processor_exec_ != nullptr) {
+// //            LOG(INFO) << "calling tx_processor_exec_";
+//             tx_processor_exec_();
+// //            LOG(INFO) << "finish tx_processor_exec_";
+//         }
 #ifndef BTHREAD_DONT_SAVE_PARKING_STATE
         _last_pl_state = _pl->get_state();
 #endif
         return _control->steal_task(tid, &_steal_seed, _steal_offset);
+    }
+
+    void ExecuteTxService()
+    {
+        if (tx_processor_exec_)
+        {
+            tx_processor_exec_();
+        }
     }
 
     TaskMeta* _cur_meta;

@@ -20,8 +20,8 @@ if(NOT DEBUG)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DNDEBUG")
 endif()
 
-include_directories(${CMAKE_CURRENT_BINARY_DIR})
-include_directories(${PROJECT_SOURCE_DIR}/src)
+include_directories(${BRPC_ROOT_DIR})
+include_directories(${BRPC_ROOT_DIR}/src)
 
 add_library(BUTIL_LIB OBJECT ${BUTIL_SOURCES})
 add_library(SOURCES_LIB OBJECT ${SOURCES})
@@ -45,10 +45,10 @@ SET_TARGET_PROPERTIES(brpc-static PROPERTIES OUTPUT_NAME brpc CLEAN_DIRECT_OUTPU
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/output/bin)
     
 set(protoc_gen_mcpack_SOURCES
-    ${PROJECT_SOURCE_DIR}/src/mcpack2pb/generator.cpp
+    ${BRPC_ROOT_DIR}/src/mcpack2pb/generator.cpp
  )
     
-add_executable(protoc-gen-mcpack ${protoc_gen_mcpack_SOURCES})
+# add_executable(protoc-gen-mcpack ${protoc_gen_mcpack_SOURCES})
 
 if(BUILD_SHARED_LIBS)
     add_library(brpc-shared SHARED $<TARGET_OBJECTS:BUTIL_LIB> 
@@ -62,8 +62,9 @@ if(BUILD_SHARED_LIBS)
         target_link_libraries(brpc-shared ${THRIFT_LIB})
     endif()
     SET_TARGET_PROPERTIES(brpc-shared PROPERTIES OUTPUT_NAME brpc CLEAN_DIRECT_OUTPUT 1)
+    set_property(TARGET brpc-shared PROPERTY POSITION_INDEPENDENT_CODE 1)
 
-    target_link_libraries(protoc-gen-mcpack brpc-shared ${DYNAMIC_LIB} pthread)
+    # target_link_libraries(protoc-gen-mcpack brpc-shared ${DYNAMIC_LIB} pthread)
 
     install(TARGETS brpc-shared
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -71,7 +72,7 @@ if(BUILD_SHARED_LIBS)
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             )
 else()
-    target_link_libraries(protoc-gen-mcpack brpc-static ${DYNAMIC_LIB} pthread)
+    # target_link_libraries(protoc-gen-mcpack brpc-static ${DYNAMIC_LIB} pthread)
 endif()
 
 
