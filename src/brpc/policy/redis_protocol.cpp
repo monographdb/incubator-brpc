@@ -163,7 +163,8 @@ ParseResult ParseRedisMessage(butil::IOBuf* source, Socket* socket,
         // accessing cc shard data which is not thread safe.
         bthread::TaskGroup *g = bthread::tls_task_group;
         if (g->tx_processor_exec_ != nullptr) {
-            g->current_task()->bound_task_group = g;
+            g->current_task()->SetBoundGroup(g, 10);
+//            g->current_task()->bound_task_group = g;
         } else if (get_tx_proc_functors != nullptr) {
             // if the tx proc functors are not set yet.
             auto functors = get_tx_proc_functors(g->group_id_);
@@ -171,12 +172,17 @@ ParseResult ParseRedisMessage(butil::IOBuf* source, Socket* socket,
             g->update_ext_proc_ = std::get<1>(functors);
             g->override_shard_heap_ = std::get<2>(functors);
             g->update_ext_proc_(1);
-            g->current_task()->bound_task_group = g;
+            g->current_task()->SetBoundGroup(g, 0);
+
+//            g->current_task()->bound_task_group = g;
         }
 
         err = ctx->parser.Consume(*source, &current_args, &ctx->arena);
         if (err != PARSE_OK) {
-            g->current_task()->bound_task_group = NULL;
+            LOG(INFO) << "caller 1";
+            g->current_task()->SetBoundGroup(NULL, 1);
+
+//            g->current_task()->bound_task_group = NULL;
             return MakeParseError(err);
         }
         while (true) {
@@ -186,17 +192,26 @@ ParseResult ParseRedisMessage(butil::IOBuf* source, Socket* socket,
                 break;
             }
             if (ConsumeCommand(ctx, current_args, false, &appender) != 0) {
-                g->current_task()->bound_task_group = NULL;
+                LOG(INFO) << "caller 2";
+                g->current_task()->SetBoundGroup(NULL, 2);
+
+//                g->current_task()->bound_task_group = NULL;
                 return MakeParseError(PARSE_ERROR_ABSOLUTELY_WRONG);
             }
             current_args.swap(next_args);
         }
         if (ConsumeCommand(ctx, current_args,
                       true /*must be the last message*/, &appender) != 0) {
-            g->current_task()->bound_task_group = NULL;
+            g->current_task()->SetBoundGroup(NULL,  3);
+
+//            g->current_task()->bound_task_group = NULL;
             return MakeParseError(PARSE_ERROR_ABSOLUTELY_WRONG);
         }
-        g->current_task()->bound_task_group = NULL;
+        LOG(INFO) << "caller 4";
+
+        g->current_task()->SetBoundGroup(NULL, 4);
+
+//        g->current_task()->bound_task_group = NULL;
         butil::IOBuf sendbuf;
         appender.move_to(sendbuf);
         if (!sendbuf.empty()) {

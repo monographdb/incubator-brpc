@@ -27,6 +27,8 @@
 #include "butil/macros.h"
 
 #include "bthread/moodycamelqueue.h"
+#include "task_meta.h"
+#include "types.h"
 
 namespace bthread {
 
@@ -41,36 +43,43 @@ public:
         return 0;
     }
 
-    bool pop(bthread_t *task) {
-      int tmp_cnt = _task_cnt.load(std::memory_order_acquire);
-      if (_tasks.try_dequeue(*task)) {
-        tmp_cnt--;
-        return true;
-      } else {
-        return false;
-      }
-      if (tmp_cnt > 0 &&
-          _task_cnt.compare_exchange_strong(tmp_cnt, tmp_cnt - 1)) {
-        if (_tasks.try_dequeue(*task)) {
-          return true;
-        } else {
-          _task_cnt++;
-          return false;
-        }
-      }
-    }
+    bool pop(bthread_t *task);
 
-    bool push(bthread_t task) {
-      if (_tasks.enqueue(task)) {
-        _task_cnt++;
-        return true;
-      }
-      return false;
-    }
+//    bool pop(bthread_t *task) {
+//      int tmp_cnt = _task_cnt.load(std::memory_order_acquire);
+//      if (_tasks.try_dequeue(*task)) {
+//        tmp_cnt--;
+//        return true;
+//      } else {
+//        return false;
+//      }
+//      if (tmp_cnt > 0 &&
+//          _task_cnt.compare_exchange_strong(tmp_cnt, tmp_cnt - 1)) {
+//        if (_tasks.try_dequeue(*task)) {
+//          return true;
+//        } else {
+//          _task_cnt++;
+//          return false;
+//        }
+//      }
+//    }
+
+bool push(bthread_t task);
+
+//    bool push(bthread_t task) {
+//      if (_tasks.enqueue(task)) {
+//        _task_cnt++;
+//        return true;
+//      }
+//      return false;
+//    }
 
     size_t capacity() const {
       return _task_cnt.load(std::memory_order_acquire);
     }
+
+    bool is_bound_queue{};
+    TaskGroup *group_id{};
 
     friend class TaskGroup;
     moodycamel::ConcurrentQueue<bthread_t> _tasks;

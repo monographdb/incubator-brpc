@@ -36,6 +36,7 @@
 #include "bthread/task_group.h"
 #include "bthread/timer_thread.h"
 #include "bthread/errno.h"
+#include "task_meta.h"
 
 extern std::function<
     std::tuple<std::function<void()>, std::function<void(int16_t)>, std::function<bool(bool)>>(int16_t)>
@@ -238,6 +239,10 @@ TaskGroup::TaskGroup(TaskControl* c)
     _steal_seed = butil::fast_rand();
     _steal_offset = OFFSET_TABLE[_steal_seed % ARRAY_SIZE(OFFSET_TABLE)];
     _pl = &c->_pl[butil::fmix64(pthread_numeric_id()) % TaskControl::PARKING_LOT_NUM];
+    _remote_rq.group_id = this;
+    _remote_rq.is_bound_queue = false;
+    _bound_rq.group_id = this;
+    _bound_rq.is_bound_queue = true;
     CHECK(c);
 }
 
@@ -606,7 +611,7 @@ void TaskGroup::ending_sched(TaskGroup** pg) {
     sched_to(pg, next_meta);
 }
 
-void TaskGroup::sched(TaskGroup** pg) {
+void TaskGroup::sched(TaskGroup** pg, bool print) {
     TaskGroup* g = *pg;
     bthread_t next_tid = 0;
     // Find next task to run, if none, switch to idle thread of the group.
@@ -617,7 +622,7 @@ void TaskGroup::sched(TaskGroup** pg) {
 #endif
     if (!popped) {
         // Yield proactively to run tx processor workload.
-        if (g->tx_processor_exec_ && g->_processed_tasks > 30) {
+        if (g->tx_processor_exec_ && (g->_processed_tasks > 30 || print)) {
             g->_processed_tasks = 0;
             next_tid = g->_main_tid;
         } else {
@@ -625,6 +630,7 @@ void TaskGroup::sched(TaskGroup** pg) {
               // Jump to main task if there's no task to run.
               g->_processed_tasks = 0;
               next_tid = g->_main_tid;
+//              LOG(INFO) << "switch to main_tid for group: " << g->group_id_;
             }
         }
     }
@@ -632,7 +638,7 @@ void TaskGroup::sched(TaskGroup** pg) {
     if (next_tid != g->_main_tid) {
         g->_processed_tasks++;
     }
-    sched_to(pg, next_tid);
+    sched_to(pg, next_tid, print);
 }
 
 void TaskGroup::sched_to(TaskGroup** pg, TaskMeta* next_meta) {
@@ -777,6 +783,25 @@ void TaskGroup::flush_nosignal_tasks_remote() {
     _control->signal_task(val);
 }
 
+void TaskGroup::ready_to_run_bound(bthread_t tid, bool nosignal) {
+    LOG(INFO) << "group: " << tls_task_group->group_id_ << "calling group: " << group_id_ << "'s ready to run bound";
+    if (!_bound_rq.push(tid)) {
+        LOG(WARNING) << "fail to push bounded task into group: " << group_id_;
+        LOG(INFO) << "group: " << tls_task_group->group_id_ << "calling group: " << group_id_ << "'s ready to run bound finish";
+
+        return ready_to_run_remote(tid, nosignal);
+    }
+    if (nosignal) {
+        _remote_num_nosignal.fetch_add(1, std::memory_order_release);
+    } else {
+        const int additional_signal =_remote_num_nosignal.load(std::memory_order_acquire);
+        _remote_num_nosignal.store(0, std::memory_order_release);
+        _remote_nsignaled.fetch_add(additional_signal, std::memory_order_release);
+        _control->signal_task(1 + additional_signal);
+    }
+    LOG(INFO) << "group: " << tls_task_group->group_id_ << "calling group: " << group_id_ << "'s ready to run bound finish";
+}
+
 void TaskGroup::ready_to_run_general(bthread_t tid, bool nosignal) {
     if (tls_task_group == this) {
         return ready_to_run(tid, nosignal);
@@ -793,6 +818,29 @@ void TaskGroup::flush_nosignal_tasks_general() {
 
 void TaskGroup::ready_to_run_in_worker(void* args_in) {
     ReadyToRunArgs* args = static_cast<ReadyToRunArgs*>(args_in);
+    TaskMeta* const m = address_meta(args->tid);
+    if (tls_task_group != nullptr) {
+        LOG(INFO) << "group: " << tls_task_group->group_id_ << " Executing ready_to_run_in_worker, gid: "
+                  << tls_task_group->group_id_ << ", tid: " << args->tid
+                  << ", meta: " << m
+                  << ", m->bound-task_group != nullptr: " << (m->bound_task_group != nullptr)
+                  << ", m->bound_task_group != tls_task_group: " << (m->bound_task_group != tls_task_group);
+    }
+    if (args->target_group != nullptr) {
+        if (args->target_group != m->bound_task_group) {
+            LOG(WARNING) << "wrong tid: " << args->tid;
+        }
+//        assert(args->target_group == m->bound_task_group);
+        LOG(INFO) << "task: " << args->tid << " is bound to another group: " << args->target_group->group_id_ << ", switch to it";
+        return args->target_group->ready_to_run_bound(args->tid, args->nosignal);
+    }
+//    if (m->bound_task_group && m->bound_task_group != tls_task_group) {
+//        // TODO(zkl): put into a reserved queue to store bound tasks, forbidding steal
+//        // if the task is bound to another group, when we want to switch groups
+//        LOG(INFO) << "task: " << args->tid << " is bound to another group, switch to it";
+//        LOG(INFO) << "current group: " << tls_task_group->group_id_ << ", target group: " << m->bound_task_group->group_id_;
+//        return m->bound_task_group->ready_to_run_bound(args->tid, args->nosignal);
+//    }
     return tls_task_group->ready_to_run(args->tid, args->nosignal);
 }
 
@@ -966,6 +1014,30 @@ void TaskGroup::yield(TaskGroup** pg) {
     ReadyToRunArgs args = { g->current_tid(), false };
     g->set_remained(ready_to_run_in_worker, &args);
     sched(pg);
+}
+
+void TaskGroup::jump_group(TaskGroup **pg, int target_gid) {
+    TaskGroup* g = *pg;
+    TaskMeta *m = address_meta(g->current_tid());
+    TaskControl *c = g->control();
+    TaskGroup *target_group = c->select_group(target_gid);
+    ReadyToRunArgs args = { g->current_tid(), false, target_group };
+    // set bound_task_group, the task will be moved there
+    m->SetBoundGroup(target_group, 100);
+
+//    m->bound_task_group = target_group;
+    assert(m->bound_task_group == target_group);
+    if (target_group != m->bound_task_group) {
+        LOG(ERROR) << "something wrong"
+            << "tid: " << args.tid << " target group: " << target_group << " m bound group: " << m->bound_task_group;
+    } else {
+//        LOG(INFO) << "tid: " << args.tid << " target group: " << target_group << " m bound group: " << m->bound_task_group;
+    }
+    LOG(INFO) << "group: " << tls_task_group->group_id_ << " set task meta for tid: "
+        << args.tid << ",meta:" << m << ", target gid: " << target_gid
+        << ", bound task group to: " << target_group << ", m->bound_group: " << m->bound_task_group;
+    g->set_remained(ready_to_run_in_worker, &args);
+    sched(pg, true);
 }
 
 void print_task(std::ostream& os, bthread_t tid) {

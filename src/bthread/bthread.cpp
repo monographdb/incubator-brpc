@@ -20,6 +20,7 @@
 // Date: Tue Jul 10 17:40:58 CST 2012
 
 #include <gflags/gflags.h>
+#include <grp.h>
 #include "butil/macros.h"                       // BAIDU_CASSERT
 #include "butil/logging.h"
 #include "bthread/task_group.h"                // TaskGroup
@@ -386,6 +387,15 @@ int bthread_yield(void) {
     }
     // pthread_yield is not available on MAC
     return sched_yield();
+}
+
+int bthread_jump_group(int group_id) {
+    bthread::TaskGroup* g = bthread::tls_task_group;
+    if (NULL != g && !g->is_current_pthread_task() && group_id != g->group_id_) {
+        bthread::TaskGroup::jump_group(&g, group_id);
+        return 0;
+    }
+    return -1;
 }
 
 int bthread_set_worker_startfn(void (*start_fn)()) {

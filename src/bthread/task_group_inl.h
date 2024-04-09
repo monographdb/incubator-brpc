@@ -59,7 +59,10 @@ inline void TaskGroup::exchange(TaskGroup** pg, bthread_t next_tid) {
     TaskGroup::sched_to(pg, next_tid);
 }
 
-inline void TaskGroup::sched_to(TaskGroup** pg, bthread_t next_tid) {
+inline void TaskGroup::sched_to(TaskGroup** pg, bthread_t next_tid, bool print) {
+    if (print) {
+        LOG(INFO) << "group: " << (*pg)->group_id_ << "sched to tid: " << next_tid << ", maintid: " << (*pg)->_main_tid;
+    }
     TaskMeta* next_meta = address_meta(next_tid);
     if (next_meta->stack == NULL) {
         ContextualStack* stk = get_stack(next_meta->stack_type(), task_runner);

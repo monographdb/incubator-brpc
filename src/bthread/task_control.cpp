@@ -61,6 +61,7 @@ void run_worker_startfn() {
 }
 
 void* TaskControl::worker_thread(void* arg) {
+    LOG(INFO) << "new worker_thread: ";
     run_worker_startfn();    
 #ifdef BAIDU_INTERNAL
     logging::ComlogInitializer comlog_initializer;
@@ -79,6 +80,7 @@ void* TaskControl::worker_thread(void* arg) {
         task_group_id);
 
     g->group_id_ = task_group_id;
+    LOG(INFO) << "set group id: " << task_group_id;
     if (get_tx_proc_functors != nullptr) {
         auto functors = get_tx_proc_functors(task_group_id);
         g->tx_processor_exec_ = functors.first;
@@ -182,6 +184,7 @@ int TaskControl::init(int concurrency) {
     
     _workers.resize(_concurrency);   
     for (int i = 0; i < _concurrency; ++i) {
+        LOG(INFO) << "create worker: " << i;
         const int rc = pthread_create(&_workers[i], NULL, worker_thread, this);
         if (rc) {
             LOG(ERROR) << "Fail to create _workers[" << i << "], " << berror(rc);
@@ -251,6 +254,21 @@ TaskGroup* TaskControl::choose_one_group() {
         return _groups[butil::fast_rand_less_than(ngroup)];
     }
     CHECK(false) << "Impossible: ngroup is 0";
+    return NULL;
+}
+
+TaskGroup* TaskControl::select_group(int group_id) {
+    const size_t ngroup = _ngroup.load(butil::memory_order_acquire);
+    for (size_t i = 0; i < ngroup; i++) {
+        if (_groups[i]->group_id_ == group_id) {
+            return _groups[i];
+        }
+    }
+//    if (size_t(group_id) < ngroup) {
+//        assert(_groups[group_id] != nullptr);
+//        return _groups[group_id];
+//    }
+    LOG(ERROR) << "Selected group: " << group_id << " out of range, group number: " << ngroup;
     return NULL;
 }
 
@@ -391,6 +409,11 @@ bool TaskControl::steal_task(bthread_t* tid, size_t* seed, size_t offset) {
                 break;
             }
             if (g->_remote_rq.pop(tid)) {
+                TaskGroup *bound_group = TaskGroup::address_meta(*tid)->bound_task_group;
+                if (bound_group != nullptr && bound_group != tls_task_group) {
+                    LOG(ERROR) <<"group: " << tls_task_group->group_id_ << " steal success from g: "
+                               << g->group_id_ << ", tid: " << *tid << " tid's bound group: " << bound_group;
+                }
                 stolen = true;
                 break;
             }

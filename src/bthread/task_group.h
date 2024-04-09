@@ -76,14 +76,14 @@ public:
                          void* __restrict arg);
 
     // Suspend caller and run next bthread in TaskGroup *pg.
-    static void sched(TaskGroup** pg);
+    static void sched(TaskGroup** pg, bool print = false);
     static void ending_sched(TaskGroup** pg);
 
     // Suspend caller and run bthread `next_tid' in TaskGroup *pg.
     // Purpose of this function is to avoid pushing `next_tid' to _rq and
     // then being popped by sched(pg), which is not necessary.
     static void sched_to(TaskGroup** pg, TaskMeta* next_meta);
-    static void sched_to(TaskGroup** pg, bthread_t next_tid);
+    static void sched_to(TaskGroup** pg, bthread_t next_tid, bool print = false);
     static void exchange(TaskGroup** pg, bthread_t next_tid);
 
     // The callback will be run in the beginning of next-run bthread.
@@ -105,6 +105,9 @@ public:
     // Suspend caller and run another bthread. When the caller will resume
     // is undefined.
     static void yield(TaskGroup** pg);
+
+    // Suspend caller and move it to another group.
+    static void jump_group(TaskGroup** pg, int target_gid);
 
     // Suspend caller until bthread `tid' terminates.
     static int join(bthread_t tid, void** return_value);
@@ -160,6 +163,9 @@ public:
     void ready_to_run_remote(bthread_t tid, bool nosignal = false);
     void flush_nosignal_tasks_remote();
 
+    // Push a bthread into the bound queue from another thread.
+    void ready_to_run_bound(bthread_t tid, bool nosignal = false);
+
     // Automatically decide the caller is remote or local, and call
     // the corresponding function.
     void ready_to_run_general(bthread_t tid, bool nosignal = false);
@@ -208,6 +214,7 @@ public:
     struct ReadyToRunArgs {
         bthread_t tid;
         bool nosignal;
+        TaskGroup *target_group{};
     };
     static void ready_to_run_in_worker(void*);
     static void ready_to_run_in_worker_ignoresignal(void*);
@@ -218,7 +225,7 @@ public:
     bool wait_task(bthread_t* tid);
 
     bool steal_task(bthread_t* tid) {
-        if (_remote_rq.pop(tid)) {
+        if (_remote_rq.pop(tid) || _bound_rq.pop(tid)) {
             return true;
         }
 #ifndef BTHREAD_DONT_SAVE_PARKING_STATE
@@ -252,6 +259,8 @@ public:
     bthread_t _main_tid;
     WorkStealingQueue<bthread_t> _rq;
     RemoteQueue _remote_rq;
+    // The tasks bound to this group. Won't be stolen by other groups.
+    RemoteQueue _bound_rq;
     std::atomic<int> _remote_num_nosignal{0};
     std::atomic<int> _remote_nsignaled{0};
 
