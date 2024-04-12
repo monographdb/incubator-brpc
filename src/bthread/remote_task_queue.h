@@ -49,15 +49,6 @@ public:
       } else {
         return false;
       }
-      if (tmp_cnt > 0 &&
-          _task_cnt.compare_exchange_strong(tmp_cnt, tmp_cnt - 1)) {
-        if (_tasks.try_dequeue(*task)) {
-          return true;
-        } else {
-          _task_cnt++;
-          return false;
-        }
-      }
     }
 
     bool push(bthread_t task) {

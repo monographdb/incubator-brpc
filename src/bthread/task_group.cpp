@@ -36,6 +36,7 @@
 #include "bthread/task_group.h"
 #include "bthread/timer_thread.h"
 #include "bthread/errno.h"
+#include "task_meta.h"
 
 extern std::function<
     std::tuple<std::function<void()>, std::function<void(int16_t)>, std::function<bool(bool)>>(int16_t)>
@@ -390,6 +391,7 @@ void TaskGroup::_release_last_context(void* arg) {
     TaskMeta* m = static_cast<TaskMeta*>(arg);
     if (m->stack_type() != STACK_TYPE_PTHREAD) {
         return_stack(m->release_stack()/*may be NULL*/);
+        m->SetBoundGroup(nullptr);
     } else {
         // it's _main_stack, don't return.
         m->set_stack(NULL);
@@ -427,6 +429,7 @@ int TaskGroup::start_foreground(TaskGroup** pg,
     m->cpuwide_start_ns = start_ns;
     m->stat = EMPTY_STAT;
     m->tid = make_tid(*m->version_butex, slot);
+    m->SetBoundGroup(nullptr);
     *th = m->tid;
     if (using_attr.flags & BTHREAD_LOG_START_AND_FINISH) {
         LOG(INFO) << "Started bthread " << m->tid;
@@ -485,6 +488,7 @@ int TaskGroup::start_background(bthread_t* __restrict th,
     m->cpuwide_start_ns = start_ns;
     m->stat = EMPTY_STAT;
     m->tid = make_tid(*m->version_butex, slot);
+    m->SetBoundGroup(nullptr);
     *th = m->tid;
     if (using_attr.flags & BTHREAD_LOG_START_AND_FINISH) {
         LOG(INFO) << "Started bthread " << m->tid;
@@ -777,6 +781,24 @@ void TaskGroup::flush_nosignal_tasks_remote() {
     _control->signal_task(val);
 }
 
+void TaskGroup::ready_to_run_bound(bthread_t tid, bool nosignal) {
+    if (!_bound_rq.push(tid)) {
+        LOG(WARNING) << "fail to push bounded task into group: " << group_id_;
+        return tls_task_group->ready_to_run(tid, nosignal);
+    }
+    // Update bound group.
+    TaskMeta *m = TaskGroup::address_meta(tid);
+    m->SetBoundGroup(this);
+    if (nosignal) {
+        _remote_num_nosignal.fetch_add(1, std::memory_order_release);
+    } else {
+        const int additional_signal =_remote_num_nosignal.load(std::memory_order_acquire);
+        _remote_num_nosignal.store(0, std::memory_order_release);
+        _remote_nsignaled.fetch_add(additional_signal, std::memory_order_release);
+        _control->signal_task(1 + additional_signal);
+    }
+}
+
 void TaskGroup::ready_to_run_general(bthread_t tid, bool nosignal) {
     if (tls_task_group == this) {
         return ready_to_run(tid, nosignal);
@@ -793,6 +815,14 @@ void TaskGroup::flush_nosignal_tasks_general() {
 
 void TaskGroup::ready_to_run_in_worker(void* args_in) {
     ReadyToRunArgs* args = static_cast<ReadyToRunArgs*>(args_in);
+    return tls_task_group->ready_to_run(args->tid, args->nosignal);
+}
+
+void TaskGroup::ready_to_run_in_target_worker(void* args_in) {
+    ReadyToRunArgs* args = static_cast<ReadyToRunArgs*>(args_in);
+    if (args->target_group != nullptr) {
+        return args->target_group->ready_to_run_bound(args->tid, args->nosignal);
+    }
     return tls_task_group->ready_to_run(args->tid, args->nosignal);
 }
 
@@ -965,6 +995,15 @@ void TaskGroup::yield(TaskGroup** pg) {
     TaskGroup* g = *pg;
     ReadyToRunArgs args = { g->current_tid(), false };
     g->set_remained(ready_to_run_in_worker, &args);
+    sched(pg);
+}
+
+void TaskGroup::jump_group(TaskGroup **pg, int target_gid) {
+    TaskGroup* g = *pg;
+    TaskControl *c = g->control();
+    TaskGroup *target_group = c->select_group(target_gid);
+    ReadyToRunArgs args = { g->current_tid(), false, target_group };
+    g->set_remained(ready_to_run_in_target_worker, &args);
     sched(pg);
 }
 
