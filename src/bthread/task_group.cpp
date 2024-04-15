@@ -819,7 +819,7 @@ void TaskGroup::ready_to_run_in_worker(void* args_in) {
 }
 
 void TaskGroup::ready_to_run_in_target_worker(void* args_in) {
-    ReadyToRunArgs* args = static_cast<ReadyToRunTargetArgs*>(args_in);
+    ReadyToRunTargetArgs* args = static_cast<ReadyToRunTargetArgs*>(args_in);
     if (args->target_group != nullptr) {
         return args->target_group->ready_to_run_bound(args->tid, args->nosignal);
     }
