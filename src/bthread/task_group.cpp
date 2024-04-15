@@ -819,7 +819,7 @@ void TaskGroup::ready_to_run_in_worker(void* args_in) {
 }
 
 void TaskGroup::ready_to_run_in_target_worker(void* args_in) {
-    ReadyToRunArgs* args = static_cast<ReadyToRunArgs*>(args_in);
+    ReadyToRunArgs* args = static_cast<ReadyToRunTargetArgs*>(args_in);
     if (args->target_group != nullptr) {
         return args->target_group->ready_to_run_bound(args->tid, args->nosignal);
     }
@@ -1002,7 +1002,7 @@ void TaskGroup::jump_group(TaskGroup **pg, int target_gid) {
     TaskGroup* g = *pg;
     TaskControl *c = g->control();
     TaskGroup *target_group = c->select_group(target_gid);
-    ReadyToRunArgs args = { g->current_tid(), false, target_group };
+    ReadyToRunTargetArgs args = { g->current_tid(), false, target_group };
     g->set_remained(ready_to_run_in_target_worker, &args);
     sched(pg);
 }

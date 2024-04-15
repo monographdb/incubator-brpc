@@ -214,10 +214,14 @@ public:
     struct ReadyToRunArgs {
         bthread_t tid;
         bool nosignal;
-        // the target group to push the task into, ready_to_run_in_target_worker
-        TaskGroup *target_group{};
     };
     static void ready_to_run_in_worker(void*);
+    struct ReadyToRunTargetArgs {
+        bthread_t tid;
+        bool nosignal;
+        // the target group to push the task into, ready_to_run_in_target_worker
+        TaskGroup *target_group;
+    };
     static void ready_to_run_in_target_worker(void*);
     static void ready_to_run_in_worker_ignoresignal(void*);
 
