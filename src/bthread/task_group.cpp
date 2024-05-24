@@ -135,7 +135,7 @@ bool TaskGroup::wait_task(bthread_t* tid) {
             tx_processor_exec_();
         }
 
-        if (_rq.pop(tid) || _remote_rq.pop(tid)) {
+        if (_rq.pop(tid) || _bound_rq.pop(tid) || _remote_rq.pop(tid)) {
             _processed_tasks++;
             return true;
         }
@@ -181,7 +181,7 @@ void TaskGroup::run_main_task() {
     TaskGroup* dummy = this;
     bthread_t tid;
     while (wait_task(&tid)) {
-        if (tx_processor_exec_ == nullptr 
+        if (tx_processor_exec_ == nullptr
             && get_tx_proc_functors != nullptr) {
             // if the tx proc functors are not set yet.
             auto functors = get_tx_proc_functors(group_id_);
@@ -799,6 +799,20 @@ void TaskGroup::ready_to_run_bound(bthread_t tid, bool nosignal) {
     }
 }
 
+void TaskGroup::resume_bound_task(bthread_t tid, bool nosignal) {
+    if (!_bound_rq.push(tid)) {
+        LOG(FATAL) << "fail to push bounded task into group: " << group_id_;
+    }
+    if (nosignal) {
+        _remote_num_nosignal.fetch_add(1, std::memory_order_release);
+    } else {
+        const int additional_signal =_remote_num_nosignal.load(std::memory_order_acquire);
+        _remote_num_nosignal.store(0, std::memory_order_release);
+        _remote_nsignaled.fetch_add(additional_signal, std::memory_order_release);
+        _control->signal_task(1 + additional_signal);
+    }
+}
+
 void TaskGroup::ready_to_run_general(bthread_t tid, bool nosignal) {
     if (tls_task_group == this) {
         return ready_to_run(tid, nosignal);
@@ -829,6 +843,10 @@ void TaskGroup::ready_to_run_in_target_worker(void* args_in) {
 void TaskGroup::ready_to_run_in_worker_ignoresignal(void* args_in) {
     ReadyToRunArgs* args = static_cast<ReadyToRunArgs*>(args_in);
     return tls_task_group->push_rq(args->tid);
+}
+
+void TaskGroup::empty_callback(void *) {
+    return;
 }
 
 struct SleepArgs {
@@ -1002,8 +1020,17 @@ void TaskGroup::jump_group(TaskGroup **pg, int target_gid) {
     TaskGroup* g = *pg;
     TaskControl *c = g->control();
     TaskGroup *target_group = c->select_group(target_gid);
+    if (target_group == nullptr) {
+        return;
+    }
     ReadyToRunTargetArgs args = { g->current_tid(), false, target_group };
     g->set_remained(ready_to_run_in_target_worker, &args);
+    sched(pg);
+}
+
+void TaskGroup::block(TaskGroup **pg) {
+    TaskGroup* g = *pg;
+    g->set_remained(empty_callback, nullptr);
     sched(pg);
 }
 

@@ -109,6 +109,9 @@ public:
     // Suspend caller and move it to another group.
     static void jump_group(TaskGroup** pg, int target_gid);
 
+    // Suspend caller bthread and block it.
+    static void block(TaskGroup** pg);
+
     // Suspend caller until bthread `tid' terminates.
     static int join(bthread_t tid, void** return_value);
 
@@ -165,6 +168,9 @@ public:
 
     // Push a bthread into the bound queue from another thread.
     void ready_to_run_bound(bthread_t tid, bool nosignal = false);
+
+    // Push a bthread bound to this group back.
+    void resume_bound_task(bthread_t tid, bool nosignal = false);
 
     // Automatically decide the caller is remote or local, and call
     // the corresponding function.
@@ -224,6 +230,7 @@ public:
     };
     static void ready_to_run_in_target_worker(void*);
     static void ready_to_run_in_worker_ignoresignal(void*);
+    static void empty_callback(void*);
 
     // Wait for a task to run.
     // Returns true on success, false is treated as permanent error and the
@@ -231,7 +238,7 @@ public:
     bool wait_task(bthread_t* tid);
 
     bool steal_task(bthread_t* tid) {
-        if (_remote_rq.pop(tid) || _bound_rq.pop(tid)) {
+        if (_bound_rq.pop(tid) || _remote_rq.pop(tid)) {
             return true;
         }
 #ifndef BTHREAD_DONT_SAVE_PARKING_STATE
