@@ -629,6 +629,12 @@ void TaskGroup::sched(TaskGroup** pg) {
               // Jump to main task if there's no task to run.
               g->_processed_tasks = 0;
               next_tid = g->_main_tid;
+            } else if (next_tid == g->current_tid()) {
+                if (!g->steal_task(&next_tid)) {
+                    next_tid = g->_main_tid;
+                    g->_processed_tasks = 0;
+                }
+                g->ready_to_run_bound(g->current_tid());
             }
         }
     }
