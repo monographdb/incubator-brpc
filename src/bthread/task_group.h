@@ -24,6 +24,7 @@
 
 #include <condition_variable>
 #include <functional>
+#include <mutex>
 #include "butil/time.h"                             // cpuwide_time_ns
 #include "bthread/task_control.h"
 #include "bthread/task_meta.h"                     // bthread_t, TaskMeta
