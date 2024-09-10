@@ -97,9 +97,11 @@ inline TaskControl* get_or_new_task_control() {
     if (NULL == c) {
         return NULL;
     }
-    int concurrency = FLAGS_bthread_min_concurrency > 0 ?
-        FLAGS_bthread_min_concurrency :
-        FLAGS_bthread_concurrency;
+    // int concurrency = FLAGS_bthread_min_concurrency > 0 ?
+    //     FLAGS_bthread_min_concurrency :
+    //     FLAGS_bthread_concurrency;
+    int concurrency = FLAGS_bthread_concurrency;
+    // Initialize all task groups at once.
     if (c->init(concurrency) != 0) {
         LOG(ERROR) << "Fail to init g_task_control";
         delete c;
@@ -404,6 +406,14 @@ int bthread_block(void) {
         return 0;
     }
     return -1;
+}
+
+int bthread_notify_worker(int group_id) {
+    bthread::TaskControl* c = bthread::get_or_new_task_control();
+    if (c == nullptr) {
+        return 0;
+    }
+    return c->signal_group(group_id, true);
 }
 
 int bthread_set_worker_startfn(void (*start_fn)()) {

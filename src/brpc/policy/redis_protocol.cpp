@@ -165,15 +165,10 @@ ParseResult ParseRedisMessage(butil::IOBuf* source, Socket* socket,
         // might jump to another task group in `ConsumeCommand`.
         bthread::TaskGroup *cur_group = bthread::tls_task_group;
         bthread::TaskMeta *cur_task = cur_group->current_task();
+        if (cur_group->tx_processor_exec_ == nullptr) {
+            cur_group->TrySetExtTxProcFuncs();
+        }
         if (cur_group->tx_processor_exec_ != nullptr) {
-            cur_task->SetBoundGroup(cur_group);
-        } else if (get_tx_proc_functors != nullptr) {
-            // if the tx proc functors are not set yet.
-            auto functors = get_tx_proc_functors(cur_group->group_id_);
-            cur_group->tx_processor_exec_ = std::get<0>(functors);
-            cur_group->update_ext_proc_ = std::get<1>(functors);
-            cur_group->override_shard_heap_ = std::get<2>(functors);
-            cur_group->update_ext_proc_(1);
             cur_task->SetBoundGroup(cur_group);
         }
 
