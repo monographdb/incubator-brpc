@@ -1158,14 +1158,14 @@ bool TaskGroup::signal(bool external_signal) {
         return false;
     }
 //    LOG(INFO) << "signal waiting group: " << group_id_;
-    std::unique_lock lk(_mux);
+    std::unique_lock<std::mutex> lk(_mux);
     _cv.notify_one();
     return true;
 }
 
 bool TaskGroup::wait(){
     _waiting.store(true, std::memory_order_release);
-    std::unique_lock lk(_mux);
+    std::unique_lock<std::mutex> lk(_mux);
     bool woken_by_external = false;
     _cv.wait(lk, [this, &woken_by_external]()->bool {
         woken_by_external = _external_wakeup.load(std::memory_order_acquire);
