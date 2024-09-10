@@ -38,9 +38,12 @@
 #include "bthread/errno.h"
 #include "task_meta.h"
 
-extern std::function<
+std::function<
     std::tuple<std::function<void()>, std::function<bool(int16_t)>, std::function<bool(bool)>>(int16_t)>
     get_tx_proc_functors;
+
+DEFINE_bool(worker_cv_notify, true, "workers use condition variable instead of futex");
+
 namespace bthread {
 
 static const bthread_attr_t BTHREAD_ATTR_TASKGROUP = {
@@ -131,9 +134,7 @@ bool TaskGroup::wait_task(bthread_t* tid) {
           return false;
         }
 
-        if (tx_processor_exec_) {
-            tx_processor_exec_();
-        }
+        RunExtTxProcTask();
 
         if (_rq.pop(tid) || _bound_rq.pop(tid) || _remote_rq.pop(tid)) {
             _processed_tasks++;
@@ -141,9 +142,17 @@ bool TaskGroup::wait_task(bthread_t* tid) {
         }
 
         empty++;
-        if (empty % 100 == 0 && steal_task(tid)) {
+//        if (empty % 100 == 0 && steal_task(tid)) {
+//            return true;
+//        }
+        if (steal_task(tid)) {
+//            LOG(INFO) << "group: " << group_id_ << " steal_task success";
             return true;
         }
+//        if ((butil::fast_rand() % 8) == 1 && steal_task(tid)) {
+//            LOG(INFO) << "group: " << group_id_ << " steal_task success";
+//            return true;
+//        }
         // keep polling for some time before waiting on parking lot
         if (FLAGS_worker_polling_time_ms <= 0 ||
             butil::cpuwide_time_ms() - poll_start_ms > FLAGS_worker_polling_time_ms) {
@@ -156,11 +165,29 @@ bool TaskGroup::wait_task(bthread_t* tid) {
                 poll_start_ms = FLAGS_worker_polling_time_ms > 0 ? butil::cpuwide_time_ms() : 0;
                 continue;
             }
-            _pl->wait(_last_pl_state);
-            poll_start_ms = FLAGS_worker_polling_time_ms > 0 ? butil::cpuwide_time_ms() : 0;
-            if (update_ext_proc_) {
-                update_ext_proc_(1);
+            // bool woken_by_external = wait();
+            if (FLAGS_worker_cv_notify) {
+                LOG(INFO) << "group: " << group_id_ << "wait on cv";
+                bool woken_externally = wait();
+                if (update_ext_proc_) {
+                    update_ext_proc_(1);
+                }
+                LOG(INFO) << "group: " << group_id_ << "wakeup, woken by external: " << woken_externally;
+                if (woken_externally) {
+                    RunExtTxProcTask();
+                }
+                else if (_bound_rq.pop(tid) || _remote_rq.pop(tid)) {
+                    return true;
+                }
+            } else {
+                LOG(INFO) << "group: " << group_id_ << "wait on parkinglot";
+                _pl->wait(_last_pl_state);
+                if (update_ext_proc_) {
+                    update_ext_proc_(1);
+                }
+                LOG(INFO) << "group: " << group_id_ << "wakeup";
             }
+            poll_start_ms = FLAGS_worker_polling_time_ms > 0 ? butil::cpuwide_time_ms() : 0;
         }
 #else
         const ParkingLot::State st = _pl->get_state();
@@ -187,15 +214,7 @@ void TaskGroup::run_main_task() {
     TaskGroup* dummy = this;
     bthread_t tid;
     while (wait_task(&tid)) {
-        if (tx_processor_exec_ == nullptr
-            && get_tx_proc_functors != nullptr) {
-            // if the tx proc functors are not set yet.
-            auto functors = get_tx_proc_functors(group_id_);
-            tx_processor_exec_ = std::get<0>(functors);
-            update_ext_proc_ = std::get<1>(functors);
-            override_shard_heap_ = std::get<2>(functors);
-            update_ext_proc_(1);
-        }
+        // LOG(INFO) << "group: " << group_id_ << " wait_task success, sched to tid: " << tid;
         TaskGroup::sched_to(&dummy, tid);
         DCHECK_EQ(this, dummy);
         DCHECK_EQ(_cur_meta->stack, _main_stack);
@@ -244,7 +263,10 @@ TaskGroup::TaskGroup(TaskControl* c)
 {
     _steal_seed = butil::fast_rand();
     _steal_offset = OFFSET_TABLE[_steal_seed % ARRAY_SIZE(OFFSET_TABLE)];
-    _pl = &c->_pl[butil::fmix64(pthread_numeric_id()) % TaskControl::PARKING_LOT_NUM];
+//    _pl = &c->_pl[group_id_];
+//    _pl->waiter_group_id = group_id_;
+//    LOG(INFO) << "Group: " << group_id_ << ", parking lot: " << _pl << ", pl group: " << _pl->waiter_group_id;
+//    _pl = &c->_pl[butil::fmix64(pthread_numeric_id()) % TaskControl::PARKING_LOT_NUM];
     CHECK(c);
 }
 
@@ -762,7 +784,8 @@ void TaskGroup::ready_to_run(bthread_t tid, bool nosignal) {
         const int additional_signal = _num_nosignal;
         _num_nosignal = 0;
         _nsignaled += 1 + additional_signal;
-        _control->signal_task(1 + additional_signal);
+//        _control->signal_task(1 + additional_signal);
+        _control->signal_group(group_id_);
     }
 }
 
@@ -771,12 +794,14 @@ void TaskGroup::flush_nosignal_tasks() {
     if (val) {
         _num_nosignal = 0;
         _nsignaled += val;
-        _control->signal_task(val);
+//        _control->signal_task(val);
+        _control->signal_group(group_id_);
     }
 }
 
 void TaskGroup::ready_to_run_remote(bthread_t tid, bool nosignal) {
 //    CHECK(address_meta(tid)->bound_task_group == nullptr);
+    // LOG(INFO) << "ready to run remote into group: " << group_id_ << ", nosignal: " << nosignal << ", tid: " << tid;
     while (!_remote_rq.push(tid)) {
         flush_nosignal_tasks_remote();
         LOG_EVERY_SECOND(ERROR)
@@ -789,7 +814,8 @@ void TaskGroup::ready_to_run_remote(bthread_t tid, bool nosignal) {
         const int additional_signal =_remote_num_nosignal.load(std::memory_order_acquire);
         _remote_num_nosignal.store(0, std::memory_order_release);
         _remote_nsignaled.fetch_add(additional_signal, std::memory_order_release);
-        _control->signal_task(1 + additional_signal);
+//        _control->signal_task(1 + additional_signal);
+        _control->signal_group(group_id_);
     }
 }
 
@@ -817,7 +843,8 @@ void TaskGroup::ready_to_run_bound(bthread_t tid, bool nosignal) {
         const int additional_signal =_remote_num_nosignal.load(std::memory_order_acquire);
         _remote_num_nosignal.store(0, std::memory_order_release);
         _remote_nsignaled.fetch_add(additional_signal, std::memory_order_release);
-        _control->signal_task(1 + additional_signal);
+//        _control->signal_task(1 + additional_signal);
+        _control->signal_group(group_id_);
     }
 }
 
@@ -831,7 +858,8 @@ void TaskGroup::resume_bound_task(bthread_t tid, bool nosignal) {
         const int additional_signal =_remote_num_nosignal.load(std::memory_order_acquire);
         _remote_num_nosignal.store(0, std::memory_order_release);
         _remote_nsignaled.fetch_add(additional_signal, std::memory_order_release);
-        _control->signal_task(1 + additional_signal);
+//        _control->signal_task(1 + additional_signal);
+        _control->signal_group(group_id_);
     }
 }
 
@@ -1128,6 +1156,57 @@ void print_task(std::ostream& os, bthread_t tid) {
            << "\nuptime_ns=" << butil::cpuwide_time_ns() - cpuwide_start_ns
            << "\ncputime_ns=" << stat.cputime_ns
            << "\nnswitch=" << stat.nswitch;
+    }
+}
+
+bool TaskGroup::signal(bool external_signal) {
+    if (external_signal) {
+        _external_wakeup.store(true, std::memory_order_release);
+    }
+    if (!_waiting.load(std::memory_order_acquire)) {
+        return false;
+    }
+//    LOG(INFO) << "signal waiting group: " << group_id_;
+    std::unique_lock lk(_mux);
+    _cv.notify_one();
+    return true;
+}
+
+bool TaskGroup::wait(){
+    _waiting.store(true, std::memory_order_release);
+    std::unique_lock lk(_mux);
+    bool woken_by_external = false;
+    _cv.wait(lk, [this, &woken_by_external]()->bool {
+        woken_by_external = _external_wakeup.load(std::memory_order_acquire);
+        // LOG(INFO) << "group: " << group_id_ << " wakeup check: "
+        //     << !_remote_rq.empty() << !_bound_rq.empty()
+        //     << woken_by_external;
+        return !_remote_rq.empty() || !_bound_rq.empty() || woken_by_external;
+    });
+    _external_wakeup.store(false, std::memory_order_relaxed);
+    _waiting.store(false, std::memory_order_release);
+    return woken_by_external;
+}
+
+void TaskGroup::RunExtTxProcTask() {
+    if (!tx_processor_exec_) {
+        TrySetExtTxProcFuncs();
+    }
+    if (tx_processor_exec_) {
+        tx_processor_exec_();
+    }
+}
+
+// Usually ExtTxProcFuncs is set in TaskGroup::wait_task
+void TaskGroup::TrySetExtTxProcFuncs() {
+    if (get_tx_proc_functors != nullptr && tx_processor_exec_ == nullptr) {
+//        LOG(INFO) << "**** group: " << group_id_ << " setting tx_processor_exec_";
+        // if the tx proc functors are not set yet.
+        auto functors = get_tx_proc_functors(group_id_);
+        tx_processor_exec_ = std::get<0>(functors);
+        update_ext_proc_ = std::get<1>(functors);
+        override_shard_heap_ = std::get<2>(functors);
+        update_ext_proc_(1);
     }
 }
 

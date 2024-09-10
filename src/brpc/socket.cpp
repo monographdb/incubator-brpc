@@ -2160,8 +2160,6 @@ int Socket::StartInputEvent(SocketId id, uint32_t events,
 
         bthread_attr_t attr = thread_attr;
         attr.keytable_pool = p->_keytable_pool;
-        // set no signal flag
-        attr.flags |= BTHREAD_NOSIGNAL;
         if (bthread_start_urgent(&tid, &attr, ProcessEvent, p) != 0) {
             LOG(FATAL) << "Fail to start ProcessEvent";
             ProcessEvent(p);

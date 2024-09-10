@@ -161,6 +161,8 @@ extern int bthread_jump_group(int group_id);
 // Yield processor to another bthread and block current task.
 extern int bthread_block(void);
 
+extern int bthread_notify_worker(int group_id);
+
 // Suspend current thread for at least `microseconds'
 // Interruptible by bthread_interrupt().
 extern int bthread_usleep(uint64_t microseconds);

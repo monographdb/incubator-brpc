@@ -22,6 +22,7 @@
 #ifndef BTHREAD_TASK_GROUP_H
 #define BTHREAD_TASK_GROUP_H
 
+#include <condition_variable>
 #include <functional>
 #include "butil/time.h"                             // cpuwide_time_ns
 #include "bthread/task_control.h"
@@ -194,6 +195,10 @@ public:
     // process make go on indefinitely.
     void push_rq(bthread_t tid);
 
+    bool signal(bool external_signal = false);
+
+    void TrySetExtTxProcFuncs();
+
     int group_id_{-1};
     // external tx processor functions. Only used with MonoRedis.
     std::function<void()> tx_processor_exec_{nullptr};
@@ -247,6 +252,10 @@ public:
         return _control->steal_task(tid, &_steal_seed, _steal_offset);
     }
 
+    bool wait();
+
+    void RunExtTxProcTask();
+
     TaskMeta* _cur_meta;
     
     // the control that this group belongs to
@@ -278,6 +287,11 @@ public:
     std::atomic<int> _remote_nsignaled{0};
 
     int _sched_recursive_guard;
+
+    std::atomic<bool> _external_wakeup{false};
+    std::atomic<bool> _waiting{false};
+    std::mutex _mux;
+    std::condition_variable _cv;
 };
 
 }  // namespace bthread

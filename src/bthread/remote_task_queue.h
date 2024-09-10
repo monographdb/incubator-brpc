@@ -57,6 +57,10 @@ public:
         return false;
     }
 
+    bool empty() const {
+        return _task_cnt.load(std::memory_order_acquire) == 0;
+    }
+
     size_t capacity() const {
         return _task_cnt.load(std::memory_order_acquire);
     }
