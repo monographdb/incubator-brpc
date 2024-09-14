@@ -161,8 +161,8 @@ bool TaskGroup::wait_task(bthread_t* tid) {
                 //     << before_wait - poll_start_us << " us";
                 wait();
                 auto after_wait = butil::cpuwide_time_us();
-                LOG(INFO) << "group: " << group_id_ << "wakeup after sleep for: " << after_wait - before_wait
-                    << " us";
+//                LOG(INFO) << "group: " << group_id_ << "wakeup after sleep for: " << after_wait - before_wait
+//                    << " us";
                 if (update_ext_proc_) {
                     update_ext_proc_(1);
                 }
