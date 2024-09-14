@@ -28,11 +28,17 @@
 #include "bthread/list_of_abafree_id.h"
 #include "bthread/bthread.h"
 
-extern std::function<
-        std::tuple<std::function<void()>, std::function<bool(int16_t)>, std::function<bool(bool)>>(int16_t)> get_tx_proc_functors;
+extern std::function<std::tuple<std::function<void()>,
+        std::function<void(int16_t)>,
+        std::function<bool(bool)>,
+        std::function<bool()>>(int16_t)>
+        get_tx_proc_functors;
 
-int bthread_set_ext_tx_prc_func(std::function<
-        std::tuple<std::function<void()>, std::function<bool(int16_t)>, std::function<bool(bool)>>(int16_t)> functors) {
+int bthread_set_ext_tx_prc_func(
+        std::function<std::tuple<std::function<void()>,
+                std::function<void(int16_t)>,
+                std::function<bool(bool)>,
+                std::function<bool()>>(int16_t)> functors) {
     if (get_tx_proc_functors == nullptr) {
         get_tx_proc_functors = functors;
         return 0;
@@ -97,9 +103,6 @@ inline TaskControl* get_or_new_task_control() {
     if (NULL == c) {
         return NULL;
     }
-    // int concurrency = FLAGS_bthread_min_concurrency > 0 ?
-    //     FLAGS_bthread_min_concurrency :
-    //     FLAGS_bthread_concurrency;
     int concurrency = FLAGS_bthread_concurrency;
     // Initialize all task groups at once.
     if (c->init(concurrency) != 0) {
@@ -413,7 +416,7 @@ int bthread_notify_worker(int group_id) {
     if (c == nullptr) {
         return 0;
     }
-    return c->signal_group(group_id, true);
+    return c->signal_group(group_id);
 }
 
 int bthread_set_worker_startfn(void (*start_fn)()) {

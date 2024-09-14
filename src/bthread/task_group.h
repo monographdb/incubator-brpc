@@ -196,15 +196,16 @@ public:
     // process make go on indefinitely.
     void push_rq(bthread_t tid);
 
-    bool signal(bool external_signal = false);
+    bool notify();
 
     void TrySetExtTxProcFuncs();
 
     int group_id_{-1};
     // external tx processor functions. Only used with MonoRedis.
     std::function<void()> tx_processor_exec_{nullptr};
-    std::function<bool(int16_t)> update_ext_proc_{nullptr};
+    std::function<void(int16_t)> update_ext_proc_{nullptr};
     std::function<bool(bool)> override_shard_heap_{nullptr};
+    std::function<bool()> has_tx_processor_work_{nullptr};
 
   private:
     friend class TaskControl;
@@ -253,6 +254,12 @@ public:
         return _control->steal_task(tid, &_steal_seed, _steal_offset);
     }
 
+    bool steal_from_others(bthread_t* tid) {
+        return _control->steal_task(tid, &_steal_seed, _steal_offset);
+    }
+
+    bool NoTasks();
+
     bool wait();
 
     void RunExtTxProcTask();
@@ -289,7 +296,6 @@ public:
 
     int _sched_recursive_guard;
 
-    std::atomic<bool> _external_wakeup{false};
     std::atomic<bool> _waiting{false};
     std::mutex _mux;
     std::condition_variable _cv;

@@ -38,11 +38,13 @@
 #include "bthread/errno.h"
 #include "task_meta.h"
 
-std::function<
-    std::tuple<std::function<void()>, std::function<bool(int16_t)>, std::function<bool(bool)>>(int16_t)>
-    get_tx_proc_functors;
+std::function<std::tuple<std::function<void()>,
+        std::function<void(int16_t)>,
+        std::function<bool(bool)>,
+        std::function<bool(void)>>(int16_t)>
+        get_tx_proc_functors;
 
-DEFINE_bool(worker_cv_notify, true, "workers use condition variable instead of futex");
+DEFINE_int32(steal_task_rnd, 100, "Steal task frequency in wait_task");
 
 namespace bthread {
 
@@ -141,53 +143,31 @@ bool TaskGroup::wait_task(bthread_t* tid) {
             return true;
         }
 
-        empty++;
-//        if (empty % 100 == 0 && steal_task(tid)) {
-//            return true;
-//        }
-        if (steal_task(tid)) {
-//            LOG(INFO) << "group: " << group_id_ << " steal_task success";
+        if (empty % FLAGS_steal_task_rnd == 0 && steal_from_others(tid)) {
+            // LOG(INFO) << "group: " << group_id_ << " steal_task success";
             return true;
         }
-//        if ((butil::fast_rand() % 8) == 1 && steal_task(tid)) {
-//            LOG(INFO) << "group: " << group_id_ << " steal_task success";
-//            return true;
-//        }
+        empty++;
+
         // keep polling for some time before waiting on parking lot
         if (FLAGS_worker_polling_time_ms <= 0 ||
             butil::cpuwide_time_ms() - poll_start_ms > FLAGS_worker_polling_time_ms) {
-            bool allow_sleep = true;
-            if (update_ext_proc_) {
-                allow_sleep = update_ext_proc_(-1);
-            }
-            if (!allow_sleep) {
-                // keep working as external processor
-                poll_start_ms = FLAGS_worker_polling_time_ms > 0 ? butil::cpuwide_time_ms() : 0;
-                continue;
-            }
-            // bool woken_by_external = wait();
-            if (FLAGS_worker_cv_notify) {
-                LOG(INFO) << "group: " << group_id_ << "wait on cv";
-                bool woken_externally = wait();
+            if (NoTasks()) {
+                if (update_ext_proc_) {
+                    update_ext_proc_(-1);
+                }
+                auto before_wait = butil::cpuwide_time_us();
+                // LOG(INFO) << "group: " << group_id_ << "wait on cv, after polling for: "
+                //     << before_wait - poll_start_us << " us";
+                wait();
+                auto after_wait = butil::cpuwide_time_us();
+                LOG(INFO) << "group: " << group_id_ << "wakeup after sleep for: " << after_wait - before_wait
+                    << " us";
                 if (update_ext_proc_) {
                     update_ext_proc_(1);
                 }
-                LOG(INFO) << "group: " << group_id_ << "wakeup, woken by external: " << woken_externally;
-                if (woken_externally) {
-                    RunExtTxProcTask();
-                }
-                else if (_bound_rq.pop(tid) || _remote_rq.pop(tid)) {
-                    return true;
-                }
-            } else {
-                LOG(INFO) << "group: " << group_id_ << "wait on parkinglot";
-                _pl->wait(_last_pl_state);
-                if (update_ext_proc_) {
-                    update_ext_proc_(1);
-                }
-                LOG(INFO) << "group: " << group_id_ << "wakeup";
             }
-            poll_start_ms = FLAGS_worker_polling_time_ms > 0 ? butil::cpuwide_time_ms() : 0;
+            poll_start_ms = FLAGS_worker_polling_time_ms > 0 ? butil::cpuwide_time_us() : 0;
         }
 #else
         const ParkingLot::State st = _pl->get_state();
@@ -817,7 +797,8 @@ void TaskGroup::flush_nosignal_tasks_remote() {
     }
     _remote_num_nosignal.store(0);
     _remote_nsignaled.fetch_add(val);
-    _control->signal_task(val);
+    // _control->signal_task(val);
+    _control->signal_group(group_id_);
 }
 
 void TaskGroup::ready_to_run_bound(bthread_t tid, bool nosignal) {
@@ -1150,10 +1131,7 @@ void print_task(std::ostream& os, bthread_t tid) {
     }
 }
 
-bool TaskGroup::signal(bool external_signal) {
-    if (external_signal) {
-        _external_wakeup.store(true, std::memory_order_release);
-    }
+bool TaskGroup::notify() {
     if (!_waiting.load(std::memory_order_acquire)) {
         return false;
     }
@@ -1163,20 +1141,18 @@ bool TaskGroup::signal(bool external_signal) {
     return true;
 }
 
+bool TaskGroup::NoTasks() {
+    return _remote_rq.empty() && _bound_rq.empty() && (has_tx_processor_work_ == nullptr || !has_tx_processor_work_());
+}
+
 bool TaskGroup::wait(){
     _waiting.store(true, std::memory_order_release);
     std::unique_lock<std::mutex> lk(_mux);
     bool woken_by_external = false;
     _cv.wait(lk, [this, &woken_by_external]()->bool {
-        woken_by_external = _external_wakeup.load(std::memory_order_acquire);
-        // LOG(INFO) << "group: " << group_id_ << " wakeup check: "
-        //     << !_remote_rq.empty() << !_bound_rq.empty()
-        //     << woken_by_external;
-        return !_remote_rq.empty() || !_bound_rq.empty() || woken_by_external;
+        return !NoTasks();
     });
-    _external_wakeup.store(false, std::memory_order_relaxed);
-    _waiting.store(false, std::memory_order_release);
-    return woken_by_external;
+    return true;
 }
 
 void TaskGroup::RunExtTxProcTask() {
@@ -1191,12 +1167,12 @@ void TaskGroup::RunExtTxProcTask() {
 // Usually ExtTxProcFuncs is set in TaskGroup::wait_task
 void TaskGroup::TrySetExtTxProcFuncs() {
     if (get_tx_proc_functors != nullptr && tx_processor_exec_ == nullptr) {
-//        LOG(INFO) << "**** group: " << group_id_ << " setting tx_processor_exec_";
-        // if the tx proc functors are not set yet.
         auto functors = get_tx_proc_functors(group_id_);
         tx_processor_exec_ = std::get<0>(functors);
         update_ext_proc_ = std::get<1>(functors);
         override_shard_heap_ = std::get<2>(functors);
+        has_tx_processor_work_ = std::get<3>(functors);
+
         update_ext_proc_(1);
     }
 }

@@ -41,8 +41,6 @@ DEFINE_int32(task_group_runqueue_capacity, 4096,
 DEFINE_int32(task_group_yield_before_idle, 0,
              "TaskGroup yields so many times before idle");
 
-DECLARE_bool(worker_cv_notify);
-
 namespace bthread {
 
 DECLARE_int32(bthread_concurrency);
@@ -318,10 +316,6 @@ int TaskControl::_add_group(TaskGroup* g) {
         _parking_lot_num++;
         _ngroup.store(ngroup + 1, butil::memory_order_release);
         CHECK(_parking_lot_num.load() == _ngroup.load());
-        LOG(INFO) << "Set pl: " << pl << " waiter group: " << pl->waiter_group_id
-                  << ", set _groups idx: " << g->group_id_ << " to g: " << g
-                  << ", set ngroup: " << ngroup + 1
-                  << ", set parking lot num: " << _parking_lot_num;
     }
     mu.unlock();
     // See the comments in _destroy_group
@@ -455,14 +449,9 @@ void TaskControl::signal_task(int num_task) {
 }
 
 
-bool TaskControl::signal_group(int group_id, bool external) {
+bool TaskControl::signal_group(int group_id) {
     CHECK(group_id < _ngroup.load(std::memory_order_relaxed));
-
-    if (FLAGS_worker_cv_notify) {
-        return _groups[group_id]->signal(external);
-    } else {
-        return _pl[group_id].signal(1);
-    }
+    return _groups[group_id]->notify();
 }
 
 void TaskControl::print_rq_sizes(std::ostream& os) {
