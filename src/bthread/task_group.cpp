@@ -129,7 +129,8 @@ bool TaskGroup::is_stopped(bthread_t tid) {
 
 bool TaskGroup::wait_task(bthread_t* tid) {
     int64_t poll_start_ms = FLAGS_worker_polling_time_ms > 0 ? butil::cpuwide_time_ms() : 0;
-    size_t empty = 0;
+    int64_t poll_start_us = butil::cpuwide_time_us();
+    int empty_rnd = 0;
     do {
 #ifndef BTHREAD_DONT_SAVE_PARKING_STATE
         if (_last_pl_state.stopped()) {
@@ -143,11 +144,11 @@ bool TaskGroup::wait_task(bthread_t* tid) {
             return true;
         }
 
-        if (empty % FLAGS_steal_task_rnd == 0 && steal_from_others(tid)) {
+        if (empty_rnd % FLAGS_steal_task_rnd == 0 && steal_from_others(tid)) {
             // LOG(INFO) << "group: " << group_id_ << " steal_task success";
             return true;
         }
-        empty++;
+        empty_rnd++;
 
         // keep polling for some time before waiting on parking lot
         if (FLAGS_worker_polling_time_ms <= 0 ||
@@ -157,17 +158,20 @@ bool TaskGroup::wait_task(bthread_t* tid) {
                     update_ext_proc_(-1);
                 }
                 auto before_wait = butil::cpuwide_time_us();
-                // LOG(INFO) << "group: " << group_id_ << "wait on cv, after polling for: "
-                //     << before_wait - poll_start_us << " us";
+//                 LOG(INFO) << "group: " << group_id_ << "wait on cv, after polling for: "
+//                     << before_wait - poll_start_us << " us";
                 wait();
                 auto after_wait = butil::cpuwide_time_us();
-//                LOG(INFO) << "group: " << group_id_ << "wakeup after sleep for: " << after_wait - before_wait
-//                    << " us";
+//                LOG(INFO) << "group: " << group_id_ << "wakeup after sleep for: "
+//                    << after_wait - before_wait << " us, force wakeup: "
+//                    << _force_wakeup.load(std::memory_order_relaxed);
                 if (update_ext_proc_) {
                     update_ext_proc_(1);
                 }
             }
-            poll_start_ms = FLAGS_worker_polling_time_ms > 0 ? butil::cpuwide_time_us() : 0;
+            poll_start_ms = FLAGS_worker_polling_time_ms > 0 ? butil::cpuwide_time_ms() : 0;
+            poll_start_us = butil::cpuwide_time_us();
+            empty_rnd = 0;
         }
 #else
         const ParkingLot::State st = _pl->get_state();
@@ -665,6 +669,8 @@ void TaskGroup::sched(TaskGroup** pg) {
 void TaskGroup::sched_to(TaskGroup** pg, TaskMeta* next_meta) {
     CHECK(next_meta->bound_task_group == nullptr || next_meta->bound_task_group == *pg);
     TaskGroup* g = *pg;
+//    LOG(INFO) << "group: " << (*pg)->group_id_ << ", sched to tid: " << next_meta->tid;
+
 #ifndef NDEBUG
     if ((++g->_sched_recursive_guard) > 1) {
         LOG(FATAL) << "Recursively(" << g->_sched_recursive_guard - 1
@@ -764,8 +770,8 @@ void TaskGroup::ready_to_run(bthread_t tid, bool nosignal) {
         const int additional_signal = _num_nosignal;
         _num_nosignal = 0;
         _nsignaled += 1 + additional_signal;
-//        _control->signal_task(1 + additional_signal);
-        _control->signal_group(group_id_);
+        _control->signal_task(1 + additional_signal);
+//        _control->signal_group(group_id_);
     }
 }
 
@@ -774,8 +780,8 @@ void TaskGroup::flush_nosignal_tasks() {
     if (val) {
         _num_nosignal = 0;
         _nsignaled += val;
-//        _control->signal_task(val);
-        _control->signal_group(group_id_);
+        _control->signal_task(val);
+//        _control->signal_group(group_id_);
     }
 }
 
@@ -806,6 +812,7 @@ void TaskGroup::flush_nosignal_tasks_remote() {
     }
     _remote_num_nosignal.store(0);
     _remote_nsignaled.fetch_add(val);
+    // TODO(zkl): only signal target group or signal other groups?
     // _control->signal_task(val);
     _control->signal_group(group_id_);
 }
@@ -1140,7 +1147,10 @@ void print_task(std::ostream& os, bthread_t tid) {
     }
 }
 
-bool TaskGroup::notify() {
+bool TaskGroup::notify(bool force_wakeup) {
+    if (force_wakeup) {
+        _force_wakeup.store(true, std::memory_order_release);
+    }
     if (!_waiting.load(std::memory_order_acquire)) {
         return false;
     }
@@ -1156,11 +1166,15 @@ bool TaskGroup::NoTasks() {
 
 bool TaskGroup::wait(){
     _waiting.store(true, std::memory_order_release);
+//    _waiting_workers.fetch_add(1, std::memory_order_release);
     std::unique_lock<std::mutex> lk(_mux);
     bool woken_by_external = false;
     _cv.wait(lk, [this, &woken_by_external]()->bool {
-        return !NoTasks();
+        return !NoTasks() || _force_wakeup.load(std::memory_order_acquire);
     });
+    _waiting.store(false, std::memory_order_release);
+//    _waiting_workers.fetch_sub(1, std::memory_order_release);
+    _force_wakeup.store(false, std::memory_order_relaxed);
     return true;
 }
 

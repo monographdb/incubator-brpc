@@ -413,6 +413,11 @@ void TaskControl::signal_task(int num_task) {
         return;
     }
 
+//    if (TaskGroup::_waiting_workers.load(std::memory_order_relaxed) == 0) {
+//        LOG(INFO) << "No worker waiting, skip signal task";
+//        return;
+//    }
+
     // TODO(gejun): Current algorithm does not guarantee enough threads will
     // be created to match caller's requests. But in another side, there's also
     // many useless signalings according to current impl. Capping the concurrency
@@ -427,7 +432,8 @@ void TaskControl::signal_task(int num_task) {
     }
     int start_index = butil::fmix64(pthread_numeric_id()) % parking_lot_num;
 //    num_task -= _pl[start_index].signal(1);
-    num_task -= signal_group(start_index);
+    bool force_wakeup = true;
+    num_task -= signal_group(start_index, force_wakeup);
 
     if (num_task > 0) {
         for (int i = 1; i < parking_lot_num && num_task > 0; ++i) {
@@ -435,7 +441,7 @@ void TaskControl::signal_task(int num_task) {
                 start_index = 0;
             }
 //            num_task -= _pl[start_index].signal(1);
-            num_task -= signal_group(start_index);
+            num_task -= signal_group(start_index, force_wakeup);
         }
     }
     if (num_task > 0 &&
@@ -450,9 +456,13 @@ void TaskControl::signal_task(int num_task) {
 }
 
 
-bool TaskControl::signal_group(int group_id) {
-    CHECK(group_id < _ngroup.load(std::memory_order_relaxed));
-    return _groups[group_id]->notify();
+bool TaskControl::signal_group(int group_id, bool force_wakeup) {
+//    CHECK(group_id < _ngroup.load(std::memory_order_relaxed));
+//    bool success = _groups[group_id]->notify(force_wakeup);
+//    LOG(INFO) << "signal group: " << group_id << ", force wakeup: " << force_wakeup
+//        << " success: " << success;
+//    return success;
+    return _groups[group_id]->notify(force_wakeup);
 }
 
 void TaskControl::print_rq_sizes(std::ostream& os) {
