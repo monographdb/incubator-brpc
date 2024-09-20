@@ -62,6 +62,11 @@ extern int bthread_start_background(bthread_t* __restrict tid,
                                     void * (*fn)(void*),
                                     void* __restrict args);
 
+extern int bthread_start_from_dispatcher(bthread_t* __restrict tid,
+                                         const bthread_attr_t* __restrict attr,
+                                         void * (*fn)(void*),
+                                         void* __restrict args);
+
 // Wake up operations blocking the thread. Different functions may behave
 // differently:
 //   bthread_usleep(): returns -1 and sets errno to ESTOP if bthread_stop()
