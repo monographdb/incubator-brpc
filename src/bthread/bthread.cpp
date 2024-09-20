@@ -103,8 +103,9 @@ inline TaskControl* get_or_new_task_control() {
     if (NULL == c) {
         return NULL;
     }
-    int concurrency = FLAGS_bthread_concurrency;
-    // Initialize all task groups at once.
+    int concurrency = FLAGS_bthread_min_concurrency > 0 ?
+                      FLAGS_bthread_min_concurrency :
+                      FLAGS_bthread_concurrency;
     if (c->init(concurrency) != 0) {
         LOG(ERROR) << "Fail to init g_task_control";
         delete c;
@@ -128,6 +129,7 @@ static bool validate_bthread_min_concurrency(const char*, int32_t val) {
     BAIDU_SCOPED_LOCK(g_task_control_mutex);
     int concurrency = c->concurrency();
     if (val > concurrency) {
+//        LOG(INFO) << val << ", " << concurrency;
         int added = c->add_workers(val - concurrency);
         return added == (val - concurrency);
     } else {
@@ -160,6 +162,18 @@ start_from_non_worker(bthread_t* __restrict tid,
     }
     return c->choose_one_group()->start_background<true>(
         tid, attr, fn, arg);
+}
+
+BUTIL_FORCE_INLINE int
+start_from_dispatcher(bthread_t* __restrict tid,
+                      const bthread_attr_t* __restrict attr,
+                      void * (*fn)(void*),
+                      void* __restrict arg) {
+    TaskControl* c = get_or_new_task_control();
+    if (NULL == c) {
+        return ENOMEM;
+    }
+    return c->choose_one_group()->start_from_dispatcher(tid, attr, fn, arg);
 }
 
 struct TidTraits {
@@ -208,6 +222,13 @@ int bthread_start_background(bthread_t* __restrict tid,
         return g->start_background<false>(tid, attr, fn, arg);
     }
     return bthread::start_from_non_worker(tid, attr, fn, arg);
+}
+
+int bthread_start_from_dispatcher(bthread_t* __restrict tid,
+                                  const bthread_attr_t* __restrict attr,
+                                  void * (*fn)(void*),
+                                  void* __restrict arg) {
+    return bthread::start_from_dispatcher(tid, attr, fn, arg);
 }
 
 void bthread_flush() {
@@ -323,6 +344,7 @@ int bthread_setconcurrency(int num) {
     }
     if (num > bthread::FLAGS_bthread_concurrency) {
         // Create more workers if needed.
+//        LOG(INFO) << num << ", " << bthread::FLAGS_bthread_concurrency;
         bthread::FLAGS_bthread_concurrency +=
             c->add_workers(num - bthread::FLAGS_bthread_concurrency);
         return 0;

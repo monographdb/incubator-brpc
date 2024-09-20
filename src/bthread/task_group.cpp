@@ -145,7 +145,7 @@ bool TaskGroup::wait_task(bthread_t* tid) {
         }
 
         if (empty_rnd % FLAGS_steal_task_rnd == 0 && steal_from_others(tid)) {
-            // LOG(INFO) << "group: " << group_id_ << " steal_task success";
+//             LOG(INFO) << "group: " << group_id_ << " steal_task success, tid: " << tid;
             return true;
         }
         empty_rnd++;
@@ -158,13 +158,13 @@ bool TaskGroup::wait_task(bthread_t* tid) {
                     update_ext_proc_(-1);
                 }
                 auto before_wait = butil::cpuwide_time_us();
-//                 LOG(INFO) << "group: " << group_id_ << "wait on cv, after polling for: "
+//                LOG(INFO) << "group: " << group_id_ << "wait on cv, after polling for: "
 //                     << before_wait - poll_start_us << " us";
                 wait();
                 auto after_wait = butil::cpuwide_time_us();
 //                LOG(INFO) << "group: " << group_id_ << "wakeup after sleep for: "
-//                    << after_wait - before_wait << " us, force wakeup: "
-//                    << _force_wakeup.load(std::memory_order_relaxed);
+//                    << after_wait - before_wait << " us";
+
                 if (update_ext_proc_) {
                     update_ext_proc_(1);
                 }
@@ -535,6 +535,58 @@ TaskGroup::start_background<false>(bthread_t* __restrict th,
                                    void * (*fn)(void*),
                                    void* __restrict arg);
 
+int TaskGroup::start_from_dispatcher(bthread_t* __restrict th,
+                                     const bthread_attr_t* __restrict attr,
+                                     void * (*fn)(void*),
+                                     void* __restrict arg) {
+    if (__builtin_expect(!fn, 0)) {
+        return EINVAL;
+    }
+    const int64_t start_ns = butil::cpuwide_time_ns();
+    const bthread_attr_t using_attr = (attr ? *attr : BTHREAD_ATTR_NORMAL);
+    butil::ResourceId<TaskMeta> slot;
+    TaskMeta* m = butil::get_resource(&slot);
+    if (__builtin_expect(!m, 0)) {
+        return ENOMEM;
+    }
+    CHECK(m->current_waiter.load(butil::memory_order_relaxed) == NULL);
+    m->stop = false;
+    m->interrupted = false;
+    m->about_to_quit = false;
+    m->fn = fn;
+    m->arg = arg;
+    CHECK(m->stack == NULL);
+    m->attr = using_attr;
+    m->local_storage = LOCAL_STORAGE_INIT;
+    if (using_attr.flags & BTHREAD_INHERIT_SPAN) {
+        m->local_storage.rpcz_parent_span = tls_bls.rpcz_parent_span;
+    }
+    m->cpuwide_start_ns = start_ns;
+    m->stat = EMPTY_STAT;
+    m->tid = make_tid(*m->version_butex, slot);
+    m->SetBoundGroup(nullptr);
+    *th = m->tid;
+    if (using_attr.flags & BTHREAD_LOG_START_AND_FINISH) {
+        LOG(INFO) << "Started bthread " << m->tid;
+    }
+    _control->_nbthreads << 1;
+
+    //    CHECK(address_meta(tid)->bound_task_group == nullptr);
+
+    while (!_remote_rq.push(m->tid)) {
+        flush_nosignal_tasks_remote();
+        LOG_EVERY_SECOND(ERROR)
+                << "_remote_rq is full, capacity=" << _remote_rq.capacity();
+        ::usleep(1000);
+    }
+    // From dispatcher, should never be nosignal, at least for now.
+    CHECK(!(using_attr.flags & BTHREAD_NOSIGNAL));
+//    _control->signal_task(1);
+    _control->signal_group(group_id_);
+
+    return 0;
+}
+
 int TaskGroup::join(bthread_t tid, void** return_value) {
     if (__builtin_expect(!tid, 0)) {  // tid of bthread is never 0.
         return EINVAL;
@@ -763,6 +815,7 @@ void TaskGroup::destroy_self() {
 }
 
 void TaskGroup::ready_to_run(bthread_t tid, bool nosignal) {
+//    LOG(INFO) << "group: " << group_id_ << " ready to run, nosignal: " << nosignal;
     push_rq(tid);
     if (nosignal) {
         ++_num_nosignal;
@@ -800,8 +853,8 @@ void TaskGroup::ready_to_run_remote(bthread_t tid, bool nosignal) {
         const int additional_signal =_remote_num_nosignal.load(std::memory_order_acquire);
         _remote_num_nosignal.store(0, std::memory_order_release);
         _remote_nsignaled.fetch_add(additional_signal, std::memory_order_release);
-//        _control->signal_task(1 + additional_signal);
-        _control->signal_group(group_id_);
+        _control->signal_task(1 + additional_signal);
+//        _control->signal_group(group_id_);
     }
 }
 
@@ -813,8 +866,8 @@ void TaskGroup::flush_nosignal_tasks_remote() {
     _remote_num_nosignal.store(0);
     _remote_nsignaled.fetch_add(val);
     // TODO(zkl): only signal target group or signal other groups?
-    // _control->signal_task(val);
-    _control->signal_group(group_id_);
+     _control->signal_task(val);
+    // _control->signal_group(group_id_);
 }
 
 void TaskGroup::ready_to_run_bound(bthread_t tid, bool nosignal) {
@@ -825,30 +878,16 @@ void TaskGroup::ready_to_run_bound(bthread_t tid, bool nosignal) {
     // Update bound group.
     TaskMeta *m = TaskGroup::address_meta(tid);
     m->SetBoundGroup(this);
-    if (nosignal) {
-        _remote_num_nosignal.fetch_add(1, std::memory_order_release);
-    } else {
-        const int additional_signal =_remote_num_nosignal.load(std::memory_order_acquire);
-        _remote_num_nosignal.store(0, std::memory_order_release);
-        _remote_nsignaled.fetch_add(additional_signal, std::memory_order_release);
-//        _control->signal_task(1 + additional_signal);
-        _control->signal_group(group_id_);
-    }
+    CHECK(!nosignal);
+    _control->signal_group(group_id_);
 }
 
 void TaskGroup::resume_bound_task(bthread_t tid, bool nosignal) {
     if (!_bound_rq.push(tid)) {
         LOG(FATAL) << "fail to push bounded task into group: " << group_id_;
     }
-    if (nosignal) {
-        _remote_num_nosignal.fetch_add(1, std::memory_order_release);
-    } else {
-        const int additional_signal =_remote_num_nosignal.load(std::memory_order_acquire);
-        _remote_num_nosignal.store(0, std::memory_order_release);
-        _remote_nsignaled.fetch_add(additional_signal, std::memory_order_release);
-//        _control->signal_task(1 + additional_signal);
-        _control->signal_group(group_id_);
-    }
+    CHECK(!nosignal);
+    _control->signal_group(group_id_);
 }
 
 void TaskGroup::ready_to_run_general(bthread_t tid, bool nosignal) {
@@ -1166,14 +1205,17 @@ bool TaskGroup::NoTasks() {
 
 bool TaskGroup::wait(){
     _waiting.store(true, std::memory_order_release);
-//    _waiting_workers.fetch_add(1, std::memory_order_release);
+    _waiting_workers.fetch_add(1, std::memory_order_release);
     std::unique_lock<std::mutex> lk(_mux);
     bool woken_by_external = false;
     _cv.wait(lk, [this, &woken_by_external]()->bool {
         return !NoTasks() || _force_wakeup.load(std::memory_order_acquire);
     });
     _waiting.store(false, std::memory_order_release);
-//    _waiting_workers.fetch_sub(1, std::memory_order_release);
+    _waiting_workers.fetch_sub(1, std::memory_order_release);
+//    if (_force_wakeup) {
+//        LOG(INFO) << "group: " << group_id_ << " force wakeup";
+//    }
     _force_wakeup.store(false, std::memory_order_relaxed);
     return true;
 }

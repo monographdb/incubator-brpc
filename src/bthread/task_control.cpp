@@ -309,15 +309,16 @@ int TaskControl::_add_group(TaskGroup* g) {
     if (ngroup < (size_t)BTHREAD_MAX_CONCURRENCY) {
         CHECK(_groups[ngroup] == nullptr);
         _groups[ngroup] = g;
-        g->group_id_ = ngroup;
+        g->group_id_ = int(ngroup);
         ParkingLot *pl = &_pl[ngroup];
         CHECK(pl->waiter_group_id == -1);
         g->_pl = pl;
         pl->waiter_group_id = g->group_id_;
         _parking_lot_num++;
         _ngroup.store(ngroup + 1, butil::memory_order_release);
-        CHECK(_parking_lot_num.load() == _ngroup.load());
+        CHECK(_parking_lot_num.load() == int(_ngroup.load()));
     }
+//    LOG(INFO) << "add group id: " << ngroup;
     mu.unlock();
     // See the comments in _destroy_group
     // TODO: Not needed anymore since non-worker pthread cannot have TaskGroup
@@ -413,10 +414,24 @@ void TaskControl::signal_task(int num_task) {
         return;
     }
 
-//    if (TaskGroup::_waiting_workers.load(std::memory_order_relaxed) == 0) {
-//        LOG(INFO) << "No worker waiting, skip signal task";
-//        return;
-//    }
+    int waiting_worker = TaskGroup::_waiting_workers.load(std::memory_order_relaxed);
+    if (waiting_worker == 0) {
+        if (FLAGS_bthread_min_concurrency > 0 &&
+            _concurrency.load(butil::memory_order_relaxed) < FLAGS_bthread_concurrency) {
+            // Add worker if all workers are busy and FLAGS_bthread_concurrency is
+            // not reached.
+            BAIDU_SCOPED_LOCK(g_task_control_mutex);
+            if (_concurrency.load(butil::memory_order_acquire) < FLAGS_bthread_concurrency) {
+//                LOG(INFO) << "concurrency: " << _concurrency.load(butil::memory_order_acquire)
+//                    << "add worker 1 " << num_task;
+                add_workers(1);
+            }
+        }
+        else {
+//            LOG(INFO) << "No worker waiting, skip signal task";
+            return;
+        }
+    }
 
     // TODO(gejun): Current algorithm does not guarantee enough threads will
     // be created to match caller's requests. But in another side, there's also
@@ -450,6 +465,8 @@ void TaskControl::signal_task(int num_task) {
         // TODO: Reduce this lock
         BAIDU_SCOPED_LOCK(g_task_control_mutex);
         if (_concurrency.load(butil::memory_order_acquire) < FLAGS_bthread_concurrency) {
+//            LOG(INFO) << "concurrency: " << _concurrency.load(butil::memory_order_acquire)
+//                << "add worker 1 " << num_task;
             add_workers(1);
         }
     }

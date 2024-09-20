@@ -77,6 +77,12 @@ public:
                          void * (*fn)(void*),
                          void* __restrict arg);
 
+    // Start a bthread, only signals target task group worker.
+    int start_from_dispatcher(bthread_t* __restrict tid,
+                              const bthread_attr_t* __restrict attr,
+                              void * (*fn)(void*),
+                              void* __restrict arg);
+
     // Suspend caller and run next bthread in TaskGroup *pg.
     static void sched(TaskGroup** pg);
     static void ending_sched(TaskGroup** pg);
@@ -296,7 +302,7 @@ public:
 
     int _sched_recursive_guard;
 
-//    inline static std::atomic<int> _waiting_workers{0};
+    inline static std::atomic<int> _waiting_workers{0};
     std::atomic<bool> _waiting{false};
     std::atomic<bool> _force_wakeup{false};
     std::mutex _mux;

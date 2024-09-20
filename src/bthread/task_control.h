@@ -118,7 +118,7 @@ private:
     bvar::PassiveStatus<std::string> _status;
     bvar::Adder<int64_t> _nbthreads;
 
-    static const int PARKING_LOT_NUM = 128;
+    static const int PARKING_LOT_NUM = BTHREAD_MAX_CONCURRENCY;
     // one worker one parking lot for precise wakeup
     std::atomic<int> _parking_lot_num{0};
     ParkingLot _pl[PARKING_LOT_NUM];
