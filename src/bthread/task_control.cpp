@@ -493,12 +493,10 @@ void TaskControl::print_rq_sizes(std::ostream& os) {
             nums[i] = (_groups[i] ? _groups[i]->_rq.volatile_size() : 0);
         }
         for (size_t i = 0; i < ngroup; ++i) {
-            nums[ngroup + i] = (_groups[i] ? _groups[i]->_remote_rq._task_cnt.load(butil::memory_order_relaxed)
-                                           : 0);
+            nums[ngroup + i] = (_groups[i] ? _groups[i]->_remote_rq.size() : 0);
         }
         for (size_t i = 0; i < ngroup; ++i) {
-            nums[ngroup * 2 + i] = (_groups[i] ? _groups[i]->_bound_rq._task_cnt.load(butil::memory_order_relaxed)
-                                               : 0);
+            nums[ngroup * 2 + i] = (_groups[i] ? _groups[i]->_bound_rq.size() : 0);
         }
     }
     os << "rq: ";

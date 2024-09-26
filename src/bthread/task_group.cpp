@@ -252,6 +252,7 @@ TaskGroup::TaskGroup(TaskControl* c)
 //    LOG(INFO) << "Group: " << group_id_ << ", parking lot: " << _pl << ", pl group: " << _pl->waiter_group_id;
 //    _pl = &c->_pl[butil::fmix64(pthread_numeric_id()) % TaskControl::PARKING_LOT_NUM];
     CHECK(c);
+    _bound_rq.is_bound_queue = true;
 }
 
 TaskGroup::~TaskGroup() {
