@@ -66,7 +66,7 @@ const bool ALLOW_UNUSED dummy_show_per_worker_usage_in_vars =
     ::GFLAGS_NS::RegisterFlagValidator(&FLAGS_show_per_worker_usage_in_vars,
                                     pass_bool);
 
-DEFINE_int32(worker_polling_time_ms, 0, "Worker keep busy polling some time before "
+DEFINE_int32(worker_polling_time_us, 0, "Worker keep busy polling some time before "
                                        "sleeping on parking lot");
 
 BAIDU_VOLATILE_THREAD_LOCAL(TaskGroup*, tls_task_group, NULL);
@@ -128,8 +128,7 @@ bool TaskGroup::is_stopped(bthread_t tid) {
 }
 
 bool TaskGroup::wait_task(bthread_t* tid) {
-    int64_t poll_start_ms = FLAGS_worker_polling_time_ms > 0 ? butil::cpuwide_time_ms() : 0;
-    int64_t poll_start_us = butil::cpuwide_time_us();
+    int64_t poll_start_us = FLAGS_worker_polling_time_us > 0 ? butil::cpuwide_time_us() : 0;
     int empty_rnd = 0;
     do {
 #ifndef BTHREAD_DONT_SAVE_PARKING_STATE
@@ -145,32 +144,34 @@ bool TaskGroup::wait_task(bthread_t* tid) {
         }
 
         if (empty_rnd % FLAGS_steal_task_rnd == 0 && steal_from_others(tid)) {
-//             LOG(INFO) << "group: " << group_id_ << " steal_task success, tid: " << tid;
+             // LOG(INFO) << "group: " << group_id_ << " steal_task success, tid: " << tid;
             return true;
         }
         empty_rnd++;
 
         // keep polling for some time before waiting on parking lot
-        if (FLAGS_worker_polling_time_ms <= 0 ||
-            butil::cpuwide_time_ms() - poll_start_ms > FLAGS_worker_polling_time_ms) {
+        if (FLAGS_worker_polling_time_us <= 0 ||
+            butil::cpuwide_time_us() - poll_start_us > FLAGS_worker_polling_time_us) {
             if (NoTasks()) {
                 if (update_ext_proc_) {
                     update_ext_proc_(-1);
                 }
-                auto before_wait = butil::cpuwide_time_us();
-//                LOG(INFO) << "group: " << group_id_ << "wait on cv, after polling for: "
-//                     << before_wait - poll_start_us << " us";
+
+                // auto before_wait = butil::cpuwide_time_us();
+                // LOG(INFO) << "group: " << group_id_ << "wait on cv, after polling for: "
+                //      << before_wait - poll_start_us << " us";
+
                 wait();
-                auto after_wait = butil::cpuwide_time_us();
-//                LOG(INFO) << "group: " << group_id_ << "wakeup after sleep for: "
-//                    << after_wait - before_wait << " us";
+
+                // auto after_wait = butil::cpuwide_time_us();
+                // LOG(INFO) << "group: " << group_id_ << "wakeup after sleep for: "
+                //     << after_wait - before_wait << " us";
 
                 if (update_ext_proc_) {
                     update_ext_proc_(1);
                 }
             }
-            poll_start_ms = FLAGS_worker_polling_time_ms > 0 ? butil::cpuwide_time_ms() : 0;
-            poll_start_us = butil::cpuwide_time_us();
+            poll_start_us = FLAGS_worker_polling_time_us > 0 ? butil::cpuwide_time_us() : 0;
             empty_rnd = 0;
         }
 #else
@@ -198,7 +199,6 @@ void TaskGroup::run_main_task() {
     TaskGroup* dummy = this;
     bthread_t tid;
     while (wait_task(&tid)) {
-        // LOG(INFO) << "group: " << group_id_ << " wait_task success, sched to tid: " << tid;
         TaskGroup::sched_to(&dummy, tid);
         DCHECK_EQ(this, dummy);
         DCHECK_EQ(_cur_meta->stack, _main_stack);
@@ -247,10 +247,6 @@ TaskGroup::TaskGroup(TaskControl* c)
 {
     _steal_seed = butil::fast_rand();
     _steal_offset = OFFSET_TABLE[_steal_seed % ARRAY_SIZE(OFFSET_TABLE)];
-//    _pl = &c->_pl[group_id_];
-//    _pl->waiter_group_id = group_id_;
-//    LOG(INFO) << "Group: " << group_id_ << ", parking lot: " << _pl << ", pl group: " << _pl->waiter_group_id;
-//    _pl = &c->_pl[butil::fmix64(pthread_numeric_id()) % TaskControl::PARKING_LOT_NUM];
     CHECK(c);
     _bound_rq.is_bound_queue = true;
 }
@@ -713,7 +709,7 @@ void TaskGroup::sched(TaskGroup** pg) {
 void TaskGroup::sched_to(TaskGroup** pg, TaskMeta* next_meta) {
     CHECK(next_meta->bound_task_group == nullptr || next_meta->bound_task_group == *pg);
     TaskGroup* g = *pg;
-//    LOG(INFO) << "group: " << (*pg)->group_id_ << ", sched to tid: " << next_meta->tid;
+    // LOG(INFO) << "group: " << (*pg)->group_id_ << ", sched to tid: " << next_meta->tid;
 
 #ifndef NDEBUG
     if ((++g->_sched_recursive_guard) > 1) {
@@ -807,7 +803,7 @@ void TaskGroup::destroy_self() {
 }
 
 void TaskGroup::ready_to_run(bthread_t tid, bool nosignal) {
-//    LOG(INFO) << "group: " << group_id_ << " ready to run, nosignal: " << nosignal;
+    // LOG(INFO) << "group: " << group_id_ << " ready to run, nosignal: " << nosignal;
     push_rq(tid);
     if (nosignal) {
         ++_num_nosignal;
@@ -857,7 +853,6 @@ void TaskGroup::flush_nosignal_tasks_remote() {
     }
     _remote_num_nosignal.store(0);
     _remote_nsignaled.fetch_add(val);
-    // TODO(zkl): only signal target group or signal other groups?
      _control->signal_task(val);
     // _control->signal_group(group_id_);
 }
@@ -1185,7 +1180,7 @@ bool TaskGroup::notify(bool force_wakeup) {
     if (!_waiting.load(std::memory_order_acquire)) {
         return false;
     }
-//    LOG(INFO) << "signal waiting group: " << group_id_;
+    // LOG(INFO) << "notifying waiting group: " << group_id_;
     std::unique_lock<std::mutex> lk(_mux);
     _cv.notify_one();
     return true;

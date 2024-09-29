@@ -129,7 +129,6 @@ static bool validate_bthread_min_concurrency(const char*, int32_t val) {
     BAIDU_SCOPED_LOCK(g_task_control_mutex);
     int concurrency = c->concurrency();
     if (val > concurrency) {
-//        LOG(INFO) << val << ", " << concurrency;
         int added = c->add_workers(val - concurrency);
         return added == (val - concurrency);
     } else {
@@ -344,7 +343,6 @@ int bthread_setconcurrency(int num) {
     }
     if (num > bthread::FLAGS_bthread_concurrency) {
         // Create more workers if needed.
-//        LOG(INFO) << num << ", " << bthread::FLAGS_bthread_concurrency;
         bthread::FLAGS_bthread_concurrency +=
             c->add_workers(num - bthread::FLAGS_bthread_concurrency);
         return 0;

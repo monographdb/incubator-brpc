@@ -192,7 +192,6 @@ int TaskControl::init(int concurrency) {
 }
 
 int TaskControl::add_workers(int num) {
-//    LOG(INFO) << "add_workers, num: " << num;
     if (num <= 0) {
         return 0;
     }
@@ -317,7 +316,7 @@ int TaskControl::_add_group(TaskGroup* g) {
         _ngroup.store(ngroup + 1, butil::memory_order_release);
         CHECK(_parking_lot_num.load() == int(_ngroup.load()));
     }
-//    LOG(INFO) << "add group id: " << ngroup;
+    // LOG(INFO) << "add group id: " << ngroup;
     mu.unlock();
     // See the comments in _destroy_group
     // TODO: Not needed anymore since non-worker pthread cannot have TaskGroup
@@ -408,7 +407,6 @@ bool TaskControl::steal_task(bthread_t* tid, size_t* seed, size_t offset) {
 }
 
 void TaskControl::signal_task(int num_task) {
-//    LOG(INFO) << "signal task: " << num_task;
     if (num_task <= 0) {
         return;
     }
@@ -421,15 +419,10 @@ void TaskControl::signal_task(int num_task) {
             // not reached.
             BAIDU_SCOPED_LOCK(g_task_control_mutex);
             if (_concurrency.load(butil::memory_order_acquire) < FLAGS_bthread_concurrency) {
-//                LOG(INFO) << "concurrency: " << _concurrency.load(butil::memory_order_acquire)
-//                    << "add worker 1 " << num_task;
                 add_workers(1);
             }
         }
-        else {
-//            LOG(INFO) << "No worker waiting, skip signal task";
-            return;
-        }
+        return;
     }
 
     // TODO(gejun): Current algorithm does not guarantee enough threads will
@@ -439,13 +432,14 @@ void TaskControl::signal_task(int num_task) {
     if (num_task > 2) {
         num_task = 2;
     }
+    // TODO(zkl): use _ngroup instead of _parking_lot_num
     int parking_lot_num = _parking_lot_num.load();
     if (parking_lot_num == 0) {
         LOG(WARNING) << "No parking lot initialized yet";
         return;
     }
     int start_index = butil::fmix64(pthread_numeric_id()) % parking_lot_num;
-//    num_task -= _pl[start_index].signal(1);
+    // num_task -= _pl[start_index].signal(1);
     bool force_wakeup = true;
     num_task -= signal_group(start_index, force_wakeup);
 
@@ -454,7 +448,7 @@ void TaskControl::signal_task(int num_task) {
             if (++start_index >= parking_lot_num) {
                 start_index = 0;
             }
-//            num_task -= _pl[start_index].signal(1);
+            // num_task -= _pl[start_index].signal(1);
             num_task -= signal_group(start_index, force_wakeup);
         }
     }
@@ -464,8 +458,6 @@ void TaskControl::signal_task(int num_task) {
         // TODO: Reduce this lock
         BAIDU_SCOPED_LOCK(g_task_control_mutex);
         if (_concurrency.load(butil::memory_order_acquire) < FLAGS_bthread_concurrency) {
-//            LOG(INFO) << "concurrency: " << _concurrency.load(butil::memory_order_acquire)
-//                << "add worker 1 " << num_task;
             add_workers(1);
         }
     }
