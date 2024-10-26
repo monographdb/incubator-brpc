@@ -403,7 +403,7 @@ ParseError RedisCommandParser::Consume(butil::IOBuf& buf,
         // Check if the buffer equals "PING\r\n"
         const size_t ping_cmd_len = 6; // Length of "PING\r\n"
         if (buf.size() < ping_cmd_len) {
-            return PARSE_ERROR_TRY_OTHERS;
+            return PARSE_ERROR_ABSOLUTELY_WRONG;
         }
         // Peek at the first 6 bytes without consuming them
         char cmd[6];
@@ -419,7 +419,7 @@ ParseError RedisCommandParser::Consume(butil::IOBuf& buf,
             args->push_back(butil::StringPiece(arg, 4));
             return PARSE_OK;
         } else {
-            return PARSE_ERROR_TRY_OTHERS;
+            return PARSE_ERROR_ABSOLUTELY_WRONG;
         }
 
         return PARSE_ERROR_ABSOLUTELY_WRONG;
