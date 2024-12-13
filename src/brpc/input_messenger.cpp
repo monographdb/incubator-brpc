@@ -29,7 +29,6 @@
 #include "brpc/protocol.h"                 // ListProtocols
 #include "brpc/rdma/rdma_endpoint.h"
 #include "brpc/input_messenger.h"
-#include "brpc/socket_runner.h"
 #include "brpc/socket.h"
 
 

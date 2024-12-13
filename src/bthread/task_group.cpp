@@ -41,7 +41,6 @@
 #include "brpc/socket.h"
 #include <liburing.h>
 #include "ring_write_buf_pool.h"
-#include "brpc/socket_runner.h"
 #include "bthread/ring_listener.h"
 
 extern std::function<
