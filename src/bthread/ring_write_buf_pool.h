@@ -2,10 +2,13 @@
 
 #include <cstdint>
 #include <cstdlib>
-#include <glog/logging.h>
+#include <butil/logging.h>
+#ifdef IO_URING_ENABLED
 #include <liburing.h>
+#endif
 #include <vector>
 
+#ifdef IO_URING_ENABLED
 class RingWriteBufferPool {
 public:
   RingWriteBufferPool(size_t pool_size, io_uring *ring) {
@@ -63,3 +66,4 @@ private:
   char *mem_bulk_{nullptr};
   std::vector<uint16_t> buf_pool_;
 };
+#endif

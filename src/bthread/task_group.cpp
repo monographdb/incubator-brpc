@@ -39,7 +39,9 @@
 #include "task_meta.h"
 
 #include "brpc/socket.h"
+#ifdef IO_URING_ENABLED
 #include <liburing.h>
+#endif
 #include "ring_write_buf_pool.h"
 #include "bthread/ring_listener.h"
 
@@ -1268,6 +1270,10 @@ std::pair<char *, uint16_t> TaskGroup::GetRingWriteBuf() {
 
 void TaskGroup::RecycleRingWriteBuf(uint16_t buf_idx) {
   ring_listener_->RecycleWriteBuf(buf_idx);
+}
+
+TaskGroup* TaskGroup::VolatileTLSTaskGroup() {
+    return BAIDU_GET_VOLATILE_THREAD_LOCAL(tls_task_group);
 }
 #endif
 }  // namespace bthread

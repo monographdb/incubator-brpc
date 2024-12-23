@@ -54,12 +54,13 @@
 #include <sys/event.h>
 #endif
 #include "bthread/task_group.h"
+#ifdef IO_URING_ENABLED
 #include <liburing.h>
+#endif
 
 namespace bthread {
 size_t __attribute__((weak))
 get_sizes(const bthread_id_list_t* list, size_t* cnt, size_t n);
-extern BAIDU_THREAD_LOCAL TaskGroup* tls_task_group;
 }
 
 extern std::function<
@@ -1134,8 +1135,7 @@ void Socket::OnRecycle() {
         if (_on_edge_triggered_events != NULL) {
 #ifdef IO_URING_ENABLED
             if (bound_g_ != nullptr) {
-              assert(bound_g_ ==
-                     BAIDU_GET_VOLATILE_THREAD_LOCAL(bthread::tls_task_group));
+              assert(bound_g_ == bthread::TaskGroup::VolatileTLSTaskGroup());
               bound_g_->UnregisterSocket(prev_fd);
               bound_g_ = nullptr;
               reg_fd_idx_ = -1;
@@ -1205,8 +1205,7 @@ void* Socket::ProcessEvent(void* arg) {
 
 #ifdef IO_URING_ENABLED
 void *Socket::SocketProcess(void *arg) {
-  bthread::TaskGroup *cur_group =
-      BAIDU_GET_VOLATILE_THREAD_LOCAL(bthread::tls_task_group);
+  bthread::TaskGroup *cur_group = bthread::TaskGroup::VolatileTLSTaskGroup();
 
   Socket *sock = static_cast<Socket *>(arg);
   SocketUniquePtr s_uptr{sock};
@@ -1232,8 +1231,7 @@ void *Socket::SocketProcess(void *arg) {
 }
 
 void *Socket::SocketRegister(void *arg) {
-  bthread::TaskGroup *cur_group =
-      BAIDU_GET_VOLATILE_THREAD_LOCAL(bthread::tls_task_group);
+  bthread::TaskGroup *cur_group = bthread::TaskGroup::VolatileTLSTaskGroup();
 
   Socket *sock = static_cast<Socket *>(arg);
   SocketUniquePtr s_uptr{sock};
@@ -1816,7 +1814,7 @@ int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
 #endif
 #ifdef IO_URING_ENABLED
             bthread::TaskGroup *g =
-                BAIDU_GET_VOLATILE_THREAD_LOCAL(bthread::tls_task_group);
+                bthread::TaskGroup::VolatileTLSTaskGroup();
             if (g != nullptr) {
                 io_uring_write_req_ = req;
                 req->data.prepare_iovecs(&iovecs_);

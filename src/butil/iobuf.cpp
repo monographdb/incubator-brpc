@@ -38,8 +38,6 @@
 #include "butil/fd_guard.h"                 // butil::fd_guard
 #include "butil/iobuf.h"
 
-#include <liburing.h>
-
 namespace butil {
 namespace iobuf {
 
@@ -965,7 +963,8 @@ void IOBuf::prepare_iovecs(std::vector<struct iovec> *iovecs) {
 
   do {
     IOBuf::BlockRef const &r = _ref_at(nvec);
-    iovec &last = iovecs->emplace_back();
+    iovecs->emplace_back();
+    iovec &last = iovecs->back();
     last.iov_base = r.block->data + r.offset;
     last.iov_len = r.length;
     ++nvec;

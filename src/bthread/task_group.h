@@ -226,6 +226,7 @@ public:
     void RecycleRingReadBuf(uint16_t bid, int32_t bytes);
     std::pair<char *, uint16_t> GetRingWriteBuf();
     void RecycleRingWriteBuf(uint16_t buf_idx);
+    static TaskGroup* VolatileTLSTaskGroup();
 #endif
   private:
     friend class TaskControl;

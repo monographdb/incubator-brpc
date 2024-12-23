@@ -3,7 +3,7 @@
 #ifdef IO_URING_ENABLED
 
 #include <condition_variable>
-#include <glog/logging.h>
+#include <butil/logging.h>
 #include <iostream>
 #include <liburing.h>
 #include <mutex>
