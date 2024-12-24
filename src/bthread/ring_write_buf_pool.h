@@ -1,14 +1,13 @@
 #pragma once
 
+#ifdef IO_URING_ENABLED
+
 #include <cstdint>
 #include <cstdlib>
 #include <butil/logging.h>
-#ifdef IO_URING_ENABLED
 #include <liburing.h>
-#endif
 #include <vector>
 
-#ifdef IO_URING_ENABLED
 class RingWriteBufferPool {
 public:
   RingWriteBufferPool(size_t pool_size, io_uring *ring) {

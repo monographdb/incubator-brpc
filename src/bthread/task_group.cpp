@@ -38,12 +38,12 @@
 #include "bthread/errno.h"
 #include "task_meta.h"
 
-#include "brpc/socket.h"
 #ifdef IO_URING_ENABLED
+#include "brpc/socket.h"
 #include <liburing.h>
-#endif
 #include "ring_write_buf_pool.h"
 #include "bthread/ring_listener.h"
+#endif
 
 extern std::function<
     std::tuple<std::function<void()>, std::function<bool(int16_t)>, std::function<bool(bool)>>(int16_t)>
