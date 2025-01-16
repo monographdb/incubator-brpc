@@ -336,10 +336,14 @@ public:
         // performance.
         bool write_in_background;
 
+        // This write must wait the result.
+        bool synchronous_write;
+
         WriteOptions()
             : id_wait(INVALID_BTHREAD_ID), abstime(NULL)
             , pipelined_count(0), auth_flags(0)
-            , ignore_eovercrowded(false), write_in_background(false) {}
+            , ignore_eovercrowded(false), write_in_background(false)
+            , synchronous_write(false) {}
     };
     int Write(butil::IOBuf *msg, const WriteOptions* options = NULL);
 

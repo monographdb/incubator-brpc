@@ -170,7 +170,9 @@ ssize_t Stream::CutMessageIntoFileDescriptor(int /*fd*/,
 }
 
 void Stream::WriteToHostSocket(butil::IOBuf* b) {
-    BRPC_HANDLE_EOVERCROWDED(_host_socket->Write(b));
+    Socket::WriteOptions wopt;
+    wopt.synchronous_write = true;
+    BRPC_HANDLE_EOVERCROWDED(_host_socket->Write(b, &wopt));
 }
 
 ssize_t Stream::CutMessageIntoSSLChannel(SSL*, butil::IOBuf**, size_t) {

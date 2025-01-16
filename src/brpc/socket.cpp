@@ -1828,8 +1828,13 @@ int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
                 io_uring_write_req_ = req;
                 req->data.prepare_iovecs(&iovecs_);
                 req->socket = this;
-                // TODO(zkl): verify the code and wait and return the write result
-                //  if called from DoWrite
+                // If this write is from Stream's DoWrite, wait and return the result.
+                if (opt.synchronous_write) {
+                    g->SocketWaitingNonFixedWrite(this);
+                    int ret = WaitForNonFixedWrite();
+                    iovecs_.clear();
+                    return ret;
+                }
                 int ret = g->SocketNonFixedWrite(this);
                 if (ret == 0) {
                     return 0;
