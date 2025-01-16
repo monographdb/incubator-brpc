@@ -220,6 +220,7 @@ public:
     void SocketRecv(brpc::Socket *sock);
     int SocketFixedWrite(brpc::Socket *sock, uint16_t ring_buf_idx);
     int SocketNonFixedWrite(brpc::Socket *sock);
+    int SocketWaitingNonFixedWrite(brpc::Socket *sock);
     const char *GetRingReadBuf(uint16_t buf_id);
     bool EnqueueInboundRingBuf(brpc::Socket *sock, int32_t bytes, uint16_t bid,
                                bool rearm);

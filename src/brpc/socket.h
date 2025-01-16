@@ -38,6 +38,8 @@
 #include "brpc/socket_id.h"               // SocketId
 #include "brpc/socket_message.h"          // SocketMessagePtr
 #include "bvar/bvar.h"
+#include "bthread/mutex.h"
+#include "bthread/condition_variable.h"
 
 #ifdef IO_URING_ENABLED
 class RingListener;
@@ -226,7 +228,7 @@ struct SocketOptions {
     // Socket keepalive related options.
     // Refer to `SocketKeepaliveOptions' for details.
     std::shared_ptr<SocketKeepaliveOptions> keepalive_options;
-    size_t bound_gid_;
+    size_t bound_gid_{99999};
 };
 
 #ifdef IO_URING_ENABLED
@@ -620,6 +622,8 @@ public:
     void RingNonFixedWriteCb(int nw);
     void ProcessInbound();
     void SetFixedWriteLen(uint32_t write_len);
+    int WaitForNonFixedWrite();
+    void NotifyWaitingNonFixedWrite(int nw);
 #endif
 private:
     DISALLOW_COPY_AND_ASSIGN(Socket);
@@ -656,6 +660,9 @@ friend void DereferenceSocket(Socket*);
     // `req' using the corresponding method. Returns written bytes on
     // success, -1 otherwise and errno is set
     ssize_t DoWrite(WriteRequest* req);
+#ifdef IO_URING_ENABLED
+    ssize_t DoWriteNew(WriteRequest* req);
+#endif
 
     // Called before returning to pool.
     void OnRecycle();
@@ -967,6 +974,10 @@ private:
 #ifdef IO_URING_ENABLED
     WriteRequest *io_uring_write_req_{nullptr};
     std::vector<struct iovec> iovecs_;
+    int32_t keep_write_nw_;
+    bool write_finish_{};
+    bthread::Mutex keep_write_mutex_;
+    bthread::ConditionVariable keep_write_cv_;
 
     std::vector<SocketInboundBuf> in_bufs_;
     bthread::TaskGroup *bound_g_{nullptr};

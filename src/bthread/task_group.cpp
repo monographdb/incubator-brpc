@@ -1201,11 +1201,13 @@ void print_task(std::ostream& os, bthread_t tid) {
 
 #ifdef IO_URING_ENABLED
 int TaskGroup::RegisterSocket(brpc::Socket *sock) {
-  return ring_listener_->Register(sock);
+    LOG(INFO) << "✨✨✨ group: " << group_id_ << " register socket: " << *sock;
+    return ring_listener_->Register(sock);
 }
 
 void TaskGroup::UnregisterSocket(int fd) {
-  ring_listener_->Unregister(fd);
+    LOG(INFO) << "🌛🌛🌛 group: " << group_id_ << " unregister fd: " << fd;
+    ring_listener_->Unregister(fd);
 }
 
 void TaskGroup::SocketRecv(brpc::Socket *sock) {
@@ -1244,6 +1246,11 @@ int TaskGroup::SocketNonFixedWrite(brpc::Socket *sock) {
   }
 
   return ret;
+}
+
+int TaskGroup::SocketWaitingNonFixedWrite(brpc::Socket *sock) {
+    int ret = ring_listener_->SubmitWaitingNonFixedWrite(sock);
+    return ret;
 }
 
 const char *TaskGroup::GetRingReadBuf(uint16_t buf_id) {

@@ -541,6 +541,8 @@ void Socket::ReleaseAllFailedWriteRequests(Socket::WriteRequest* req) {
 }
 
 int Socket::ResetFileDescriptor(int fd, size_t bound_gid) {
+    LOG(INFO) << "ResetFileDescriptor socket: " << *this << ", new_fd: "
+        << fd << ", bound gid: " << bound_gid;
     // Reset message sizes when fd is changed.
     _last_msg_size = 0;
     _avg_msg_size = 0;
@@ -549,6 +551,7 @@ int Socket::ResetFileDescriptor(int fd, size_t bound_gid) {
     _fd.store(fd, butil::memory_order_release);
     _reset_fd_real_us = butil::gettimeofday_us();
     if (!ValidFileDescriptor(fd)) {
+        LOG(INFO) << "not ValidFileDescriptor fd: " << fd;
         return 0;
     }
     // OK to fail, non-socket fd does not support this.
@@ -597,7 +600,6 @@ int Socket::ResetFileDescriptor(int fd, size_t bound_gid) {
       if (_on_edge_triggered_events == InputMessenger::OnNewMessagesFromRing) {
         bthread_attr_t attr;
         attr = BTHREAD_ATTR_NORMAL;
-        attr = attr | BTHREAD_NEVER_QUIT;
 
         SocketUniquePtr socket_uptr;
         ReAddress(&socket_uptr);
@@ -784,6 +786,7 @@ int Socket::Create(const SocketOptions& options, SocketId* id) {
         return -1;
     }
     *id = m->_this_id;
+    LOG(INFO) << "Socket create: " << *m;
     return 0;
 }
 
@@ -1110,6 +1113,7 @@ int Socket::Status(SocketId id, int32_t* nref) {
 }
 
 void Socket::OnRecycle() {
+    LOG(INFO) << "♻️♻️♻️Socket: " << *this << "OnRecycle";
     const bool create_by_connect = CreatedByConnect();
     if (_app_connect) {
         std::shared_ptr<AppConnect> tmp;
@@ -1209,9 +1213,10 @@ void *Socket::SocketProcess(void *arg) {
 
   Socket *sock = static_cast<Socket *>(arg);
   SocketUniquePtr s_uptr{sock};
-  assert(sock->bound_g_ == cur_group);
+  CHECK(sock->bound_g_ == cur_group);
 
-  for (auto &rbuf : sock->in_bufs_) {
+  for (size_t idx = 0; idx < sock->in_bufs_.size(); ++idx) {
+    auto &rbuf = sock->in_bufs_[idx];
     sock->inbound_nw_ = rbuf.bytes_;
     if (rbuf.bytes_ > 0) {
       assert(sock->_read_buf.size() == 0);
@@ -1249,6 +1254,10 @@ void *Socket::SocketRegister(void *arg) {
 
 void Socket::SocketResume(Socket *sock, InboundRingBuf &rbuf,
                           bthread::TaskGroup *group) {
+  LOG(INFO) << "SocketResume, Socket: " << *sock << ", group: " << group->group_id_
+    << ", need_rearm: " << rbuf.need_rearm_
+    << ", rbuf bytes: " << rbuf.bytes_
+    << ", in_bufs size: " << sock->in_bufs_.size();
   if (sock->_on_edge_triggered_events == nullptr || sock->fd() < 0) {
     if (rbuf.bytes_ > 0) {
       assert(rbuf.buf_id_ != UINT16_MAX);
@@ -1819,11 +1828,19 @@ int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
                 io_uring_write_req_ = req;
                 req->data.prepare_iovecs(&iovecs_);
                 req->socket = this;
+                // TODO(zkl): verify the code and wait and return the write result
+                //  if called from DoWrite
                 int ret = g->SocketNonFixedWrite(this);
                 if (ret == 0) {
                     return 0;
                 }
+                iovecs_.clear();
             }
+            // LOG(INFO) << "Start Write tls_group: " << g
+            //     << " Directly write in StartWrite: " << *this
+            //     << " socket: " << *this
+            //     << ", data: " << req->data;
+
 #endif
             nw = req->data.cut_into_file_descriptor(fd());
         }
@@ -1842,6 +1859,7 @@ int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
         AddOutputBytes(nw);
     }
     if (IsWriteComplete(req, true, NULL)) {
+        LOG(INFO) << "Socket: " << *this << " Write complete";
         ReturnSuccessfulWriteRequest(req);
         return 0;
     }
@@ -1871,6 +1889,7 @@ void* Socket::KeepWrite(void* void_arg) {
     g_vars->nkeepwrite << 1;
     WriteRequest* req = static_cast<WriteRequest*>(void_arg);
     SocketUniquePtr s(req->socket);
+    LOG(INFO) << "Socket: " << *req->socket << "KeepWrite";
 
     // When error occurs, spin until there's no more requests instead of
     // returning directly otherwise _write_head is permantly non-NULL which
@@ -1885,6 +1904,7 @@ void* Socket::KeepWrite(void* void_arg) {
         }
         const ssize_t nw = s->DoWrite(req);
         if (nw < 0) {
+            LOG(ERROR) << "Socket: " << *req->socket << " after DoWrite, nw < 0, errno: " << errno;
             if (errno != EAGAIN && errno != EOVERCROWDED) {
                 const int saved_errno = errno;
                 PLOG(WARNING) << "Fail to keep-write into " << *s;
@@ -1944,6 +1964,12 @@ void* Socket::KeepWrite(void* void_arg) {
 #endif
                 g_vars->nwaitepollout << 1;
                 bool pollin = (s->_on_edge_triggered_events != NULL);
+#ifdef IO_URING_ENABLED
+                if (s->bound_g_ != nullptr) {
+                    // Only set pollout since the socket is already listened by RingListener.
+                    pollin = false;
+                }
+#endif
                 const int rc = s->WaitEpollOut(s->fd(), pollin, &duetime);
                 if (rc < 0 && errno != ETIMEDOUT) {
                     const int saved_errno = errno;
@@ -1972,6 +1998,7 @@ void* Socket::KeepWrite(void* void_arg) {
     return NULL;
 }
 
+// TODO(zkl): verify stream KeepWrite->DoWrite->StartWrite cycle, wait nw in the StartWrite
 ssize_t Socket::DoWrite(WriteRequest* req) {
     // Group butil::IOBuf in the list into a batch array.
     butil::IOBuf* data_list[DATA_LIST_MAX];
@@ -1984,6 +2011,7 @@ ssize_t Socket::DoWrite(WriteRequest* req) {
     if (ssl_state() == SSL_OFF) {
         // Write IOBuf in the batch array into the fd.
         if (_conn) {
+            LOG(INFO) << "Stream Socket: " << *this << " _conn->CutMessageIntoFileDescriptor";
             return _conn->CutMessageIntoFileDescriptor(fd(), data_list, ndata);
         } else {
 #if BRPC_WITH_RDMA
@@ -1991,8 +2019,35 @@ ssize_t Socket::DoWrite(WriteRequest* req) {
                 return _rdma_ep->CutFromIOBufList(data_list, ndata);
             }
 #endif
+#ifdef IO_URING_ENABLED
+            butil::IOBuf::cut_multiple_into_iovecs(&iovecs_, data_list, ndata);
+            // Submit write into the iouring and wait for the result
+            bthread::TaskGroup *g =
+                    bthread::TaskGroup::VolatileTLSTaskGroup();
+            int ret = g->SocketWaitingNonFixedWrite(this);
+            if (ret != 0) {
+                LOG(FATAL) << "Submit Waiting Fixed write fails. Socket: " << *this;
+                return -1;
+            }
+            int nw = WaitForNonFixedWrite();
+            if (nw < 0) {
+                LOG(ERROR) << "WaitForNonFixedWrite return nw: " << nw << ", socket: " << *this;
+                errno = -nw;
+                return nw;
+            }
+            size_t npop_all = nw;
+            for (size_t i = 0; i < ndata; ++i) {
+                npop_all -= data_list[i]->pop_front(npop_all);
+                if (npop_all == 0) {
+                    break;
+                }
+            }
+
+            return nw;
+#else
             return butil::IOBuf::cut_multiple_into_file_descriptor(
                 fd(), data_list, ndata);
+#endif
         }
     }
 
@@ -3030,6 +3085,7 @@ std::string Socket::description() const {
 void Socket::RingNonFixedWriteCb(int nw) {
     // Deferences the socket if the write request finishes.
     SocketUniquePtr sock(this);
+    LOG(INFO) << "Socket: " << *this << " RingNonFixedWriteCb gets nw: " << nw;
 
     WriteRequest *req = io_uring_write_req_;
     assert(req->socket == this);
@@ -3037,18 +3093,20 @@ void Socket::RingNonFixedWriteCb(int nw) {
         req->data.pop_front(nw);
     }
 
-    int saved_errno = errno;
+    int saved_errno = 0;
     bthread_t th;
 
     if (nw < 0) {
+        LOG(INFO) << "RingNonFixedWriteCb return negative res: " << nw << ", errno: " << errno
+            << "socket: " << *this;
         // RTMP may return EOVERCROWDED
-        if (errno != EAGAIN && errno != EOVERCROWDED) {
-            saved_errno = errno;
+        if (-nw != EAGAIN && -nw != EOVERCROWDED) {
+            saved_errno = -nw;
             // EPIPE is common in pooled connections + backup requests.
-            PLOG_IF(WARNING, errno != EPIPE) << "Fail to write into " << *this;
+            PLOG_IF(WARNING, saved_errno != EPIPE) << "Fail to write into " << *this;
             SetFailed(saved_errno, "Fail to write into %s: %s",
                       description().c_str(), berror(saved_errno));
-            goto CALLBACK_FAIL_TO_WRITE;
+            goto FAIL_TO_WRITE;
         }
     } else {
         AddOutputBytes(nw);
@@ -3058,18 +3116,18 @@ void Socket::RingNonFixedWriteCb(int nw) {
         return;
     }
 
+KEEPWRITE_IN_BACKGROUND:
     // KeepWrite will continue to reference the socket. So, releases the unique
     // pointer which does not decrement the reference count.
     (void) sock.release();
-    LOG(INFO) << "sock " << id() << " non-fixed write cb keep write.";
+    LOG(INFO) << "sock " << *this << " non-fixed write cb keep write.";
     if (bthread_start_background(&th, &BTHREAD_ATTR_NORMAL,
                                  KeepWrite, req) != 0) {
         LOG(FATAL) << "Fail to start KeepWrite";
         KeepWrite(req);
     }
     return;
-
-CALLBACK_FAIL_TO_WRITE:
+FAIL_TO_WRITE:
     // `SetFailed' before `ReturnFailedWriteRequest' (which will calls
     // `on_reset' callback inside the id object) so that we immediately
     // know this socket has failed inside the `on_reset' callback
@@ -3081,7 +3139,6 @@ CALLBACK_FAIL_TO_WRITE:
 void Socket::ProcessInbound() {
   bthread_attr_t attr;
   attr = BTHREAD_ATTR_NORMAL;
-  attr = attr | BTHREAD_NEVER_QUIT;
 
   SocketUniquePtr socket_uptr;
   ReAddress(&socket_uptr);
@@ -3089,14 +3146,36 @@ void Socket::ProcessInbound() {
   // Start bthread that continously processes messages of this socket.
   bthread_t tid;
   attr.keytable_pool = _keytable_pool;
-  if (bthread_start_urgent(&tid, &attr, brpc::Socket::SocketProcess, this) !=
-      0) {
+  bthread::TaskGroup *cur_group = bthread::TaskGroup::VolatileTLSTaskGroup();
+  CHECK(bound_g_ == cur_group) << "cur_group: " << cur_group << " bound_g_: " << bound_g_;
+  if (bthread_start_from_bound_group(cur_group->group_id_, &tid, &attr, SocketProcess, this) != 0) {
     LOG(FATAL) << "Fail to start SocketProcess";
-    brpc::Socket::SocketProcess(this);
+    SocketProcess(this);
   }
 }
 
 void Socket::SetFixedWriteLen(uint32_t write_len) { write_len_ = write_len; }
+
+int Socket::WaitForNonFixedWrite() {
+    LOG(INFO) << "Socket: " << *this << " WaitForNonFixedWrite....";
+    std::unique_lock lk(keep_write_mutex_);
+    while (!write_finish_) {
+        keep_write_cv_.wait(lk);
+    }
+    write_finish_ = false;
+    LOG(INFO) << "Socket: " << *this
+        << "WaitForNonFixedWrite Finishes, nw: " << keep_write_nw_;
+    return keep_write_nw_;
+}
+
+void Socket::NotifyWaitingNonFixedWrite(int nw) {
+    LOG(INFO) << "Socket: " << *this << " NotifyWaitingNonFixedWrite....";
+    std::unique_lock lk(keep_write_mutex_);
+    write_finish_ = true;
+    keep_write_nw_ = nw;
+    keep_write_cv_.notify_one();
+    LOG(INFO) << "Socket: " << *this << " Notify finishes!!!";
+}
 #endif
 
 SocketSSLContext::SocketSSLContext()
@@ -3120,7 +3199,8 @@ ostream& operator<<(ostream& os, const brpc::Socket& sock) {
     if (fd >= 0) {
         os << " fd=" << fd;
     }
-    os << " addr=" << sock.remote_side();
+    os << " remote addr=" << sock.remote_side();
+    os << " local addr=" << sock.local_side();
     const int local_port = sock.local_side().port;
     if (local_port > 0) {
         os << ':' << local_port;
