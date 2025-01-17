@@ -247,8 +247,6 @@ void* EventDispatcher::HandleEpollOut(void *arg)
 }
 
 void EventDispatcher::Run() {
-    std::unordered_map<uint64_t, bthread::TaskGroup *> sock_group;
-
     while (!_stop) {
         epoll_event e[32];
 #ifdef BRPC_ADDITIONAL_EPOLL

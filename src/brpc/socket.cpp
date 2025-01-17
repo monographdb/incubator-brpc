@@ -541,8 +541,6 @@ void Socket::ReleaseAllFailedWriteRequests(Socket::WriteRequest* req) {
 }
 
 int Socket::ResetFileDescriptor(int fd, size_t bound_gid) {
-    LOG(INFO) << "ResetFileDescriptor socket: " << *this << ", new_fd: "
-        << fd << ", bound gid: " << bound_gid;
     // Reset message sizes when fd is changed.
     _last_msg_size = 0;
     _avg_msg_size = 0;
@@ -785,7 +783,6 @@ int Socket::Create(const SocketOptions& options, SocketId* id) {
         return -1;
     }
     *id = m->_this_id;
-    LOG(INFO) << "Socket create: " << *m;
     return 0;
 }
 
@@ -1138,9 +1135,6 @@ void Socket::OnRecycle() {
         if (_on_edge_triggered_events != NULL) {
 #ifdef IO_URING_ENABLED
             if (bound_g_ != nullptr) {
-                if (bound_g_ != bthread::TaskGroup::VolatileTLSTaskGroup()) {
-                    LOG(ERROR) << "?????bound g: " << bound_g_ << " tsl g: " << bthread::TaskGroup::VolatileTLSTaskGroup();
-                }
                 bthread_attr_t attr = BTHREAD_ATTR_NORMAL;
                 bthread_t tid;
                 intptr_t arg = prev_fd;
@@ -1228,9 +1222,6 @@ void *Socket::SocketProcess(void *arg) {
     auto &rbuf = sock->in_bufs_[idx];
     sock->inbound_nw_ = rbuf.bytes_;
     if (rbuf.bytes_ > 0) {
-        if (idx == 0) {
-            CHECK(sock->_read_buf.size() == 0);
-        }
       const char *buf_head = cur_group->GetRingReadBuf(rbuf.buf_id_);
       sock->_read_buf.append(buf_head, rbuf.bytes_);
       cur_group->RecycleRingReadBuf(rbuf.buf_id_, rbuf.bytes_);
@@ -1272,10 +1263,6 @@ void *Socket::SocketUnRegister(void *arg) {
 
 void Socket::SocketResume(Socket *sock, InboundRingBuf &rbuf,
                           bthread::TaskGroup *group) {
-  LOG(INFO) << "SocketResume, Socket: " << *sock << ", group: " << group->group_id_
-    << ", need_rearm: " << rbuf.need_rearm_
-    << ", rbuf bytes: " << rbuf.bytes_
-    << ", in_bufs size: " << sock->in_bufs_.size();
   if (sock->_on_edge_triggered_events == nullptr || sock->fd() < 0) {
     if (rbuf.bytes_ > 0) {
       CHECK(rbuf.buf_id_ != UINT16_MAX);
@@ -1848,8 +1835,10 @@ int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
                 req->socket = this;
                 // If this write is from Stream's DoWrite, wait and return the result.
                 if (opt.synchronous_write) {
-                    g->SocketWaitingNonFixedWrite(this);
-                    nw = WaitForNonFixedWrite();
+                    nw = g->SocketWaitingNonFixedWrite(this);
+                    if (nw < 0) {
+                        errno = -nw;
+                    }
                     iovecs_.clear();
                 }
                 else {
@@ -1860,10 +1849,6 @@ int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
                     iovecs_.clear();
                 }
             }
-            // LOG(INFO) << "Start Write tls_group: " << g
-            //     << " Directly write in StartWrite: " << *this
-            //     << " socket: " << *this
-            //     << ", data: " << req->data;
 
 #endif
             nw = req->data.cut_into_file_descriptor(fd());
@@ -1883,7 +1868,6 @@ int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
         AddOutputBytes(nw);
     }
     if (IsWriteComplete(req, true, NULL)) {
-        LOG(INFO) << "Socket: " << *this << " Write complete";
         ReturnSuccessfulWriteRequest(req);
         return 0;
     }
@@ -1913,7 +1897,6 @@ void* Socket::KeepWrite(void* void_arg) {
     g_vars->nkeepwrite << 1;
     WriteRequest* req = static_cast<WriteRequest*>(void_arg);
     SocketUniquePtr s(req->socket);
-    LOG(INFO) << "Socket: " << *req->socket << "KeepWrite";
 
     // When error occurs, spin until there's no more requests instead of
     // returning directly otherwise _write_head is permantly non-NULL which
@@ -1928,7 +1911,6 @@ void* Socket::KeepWrite(void* void_arg) {
         }
         const ssize_t nw = s->DoWrite(req);
         if (nw < 0) {
-            LOG(ERROR) << "Socket: " << *s << " after DoWrite, nw < 0, errno: " << errno;
             if (errno != EAGAIN && errno != EOVERCROWDED) {
                 const int saved_errno = errno;
                 PLOG(WARNING) << "Fail to keep-write into " << *s;
@@ -2022,7 +2004,6 @@ void* Socket::KeepWrite(void* void_arg) {
     return NULL;
 }
 
-// TODO(zkl): verify stream KeepWrite->DoWrite->StartWrite cycle, wait nw in the StartWrite
 ssize_t Socket::DoWrite(WriteRequest* req) {
     // Group butil::IOBuf in the list into a batch array.
     butil::IOBuf* data_list[DATA_LIST_MAX];
@@ -2035,7 +2016,6 @@ ssize_t Socket::DoWrite(WriteRequest* req) {
     if (ssl_state() == SSL_OFF) {
         // Write IOBuf in the batch array into the fd.
         if (_conn) {
-            LOG(INFO) << "Stream Socket: " << *this << " _conn->CutMessageIntoFileDescriptor";
             return _conn->CutMessageIntoFileDescriptor(fd(), data_list, ndata);
         } else {
 #if BRPC_WITH_RDMA
@@ -2048,12 +2028,7 @@ ssize_t Socket::DoWrite(WriteRequest* req) {
             // Submit write into the iouring and wait for the result
             bthread::TaskGroup *g =
                     bthread::TaskGroup::VolatileTLSTaskGroup();
-            int ret = g->SocketWaitingNonFixedWrite(this);
-            if (ret != 0) {
-                LOG(FATAL) << "Submit Waiting Fixed write fails. Socket: " << *this;
-                return -1;
-            }
-            int nw = WaitForNonFixedWrite();
+            int nw = g->SocketWaitingNonFixedWrite(this);
             if (nw < 0) {
                 LOG(ERROR) << "WaitForNonFixedWrite return nw: " << nw << ", socket: " << *this;
                 errno = -nw;
@@ -3121,8 +3096,6 @@ void Socket::RingNonFixedWriteCb(int nw) {
     bthread_t th;
 
     if (nw < 0) {
-        LOG(INFO) << "RingNonFixedWriteCb return negative res: " << nw << ", errno: " << errno
-            << "socket: " << *this;
         // RTMP may return EOVERCROWDED
         if (-nw != EAGAIN && -nw != EOVERCROWDED) {
             saved_errno = -nw;

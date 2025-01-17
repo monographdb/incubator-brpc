@@ -21,7 +21,6 @@
 
 #include <limits>
 #include <memory>           // std::unique_ptr
-// #include <string_view>
 #include <vector>
 #include "butil/iobuf.h"
 #include "butil/status.h"

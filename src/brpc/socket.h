@@ -664,9 +664,6 @@ friend void DereferenceSocket(Socket*);
     // `req' using the corresponding method. Returns written bytes on
     // success, -1 otherwise and errno is set
     ssize_t DoWrite(WriteRequest* req);
-#ifdef IO_URING_ENABLED
-    ssize_t DoWriteNew(WriteRequest* req);
-#endif
 
     // Called before returning to pool.
     void OnRecycle();

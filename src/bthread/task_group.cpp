@@ -1250,7 +1250,10 @@ int TaskGroup::SocketNonFixedWrite(brpc::Socket *sock) {
 
 int TaskGroup::SocketWaitingNonFixedWrite(brpc::Socket *sock) {
     int ret = ring_listener_->SubmitWaitingNonFixedWrite(sock);
-    return ret;
+    if (ret != 0) {
+        LOG(FATAL) << "Submit Waiting Fixed write fails. Socket: " << *sock;
+    }
+    return sock->WaitForNonFixedWrite();
 }
 
 const char *TaskGroup::GetRingReadBuf(uint16_t buf_id) {

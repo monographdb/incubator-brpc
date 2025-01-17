@@ -261,7 +261,6 @@ TaskGroup *TaskControl::choose_group(size_t g_seed) {
     size_t g_idx = g_seed % ngroup;
     return _groups[g_idx];
   }
-  CHECK(false) << "Impossible: ngroup is 0";
   return NULL;
 }
 
