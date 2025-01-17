@@ -211,7 +211,7 @@ ParseResult ParseRedisMessage(butil::IOBuf* source, Socket* socket,
 #ifdef IO_URING_ENABLED
         uint32_t ring_buf_size = appender.ring_buffer_size();
         if (ring_buf_size > 0) {
-          assert(sendbuf.empty());
+          CHECK(sendbuf.empty());
           socket->SetFixedWriteLen(ring_buf_size);
           int ret = cur_group->SocketFixedWrite(socket, ring_buf_idx);
           if (ret != 0) {
