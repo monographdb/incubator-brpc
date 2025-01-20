@@ -1839,6 +1839,9 @@ int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
                     if (nw < 0) {
                         errno = -nw;
                     }
+                    else {
+                        req->data.pop_front(nw);
+                    }
                     iovecs_.clear();
                 }
                 else {
