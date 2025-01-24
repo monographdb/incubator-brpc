@@ -661,8 +661,6 @@ private:
     }
 
     void HandleRecv(brpc::Socket *sock, io_uring_cqe *cqe, bool is_group_worker) {
-        LOG(INFO) << "HandleRecv, socket: " << *sock
-            << " cqe: " << cqe << " res: " << cqe->res << ", group: " << is_group_worker;
         int32_t nw = cqe->res;
         uint16_t buf_id = UINT16_MAX;
         bool need_rearm = false;

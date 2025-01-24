@@ -1201,12 +1201,10 @@ void print_task(std::ostream& os, bthread_t tid) {
 
 #ifdef IO_URING_ENABLED
 int TaskGroup::RegisterSocket(brpc::Socket *sock) {
-    LOG(INFO) << "✨✨✨ group: " << group_id_ << " register socket: " << *sock;
     return ring_listener_->Register(sock);
 }
 
 void TaskGroup::UnregisterSocket(int fd) {
-    LOG(INFO) << "🌛🌛🌛 group: " << group_id_ << " unregister fd: " << fd;
     ring_listener_->Unregister(fd);
 }
 
