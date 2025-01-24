@@ -336,14 +336,22 @@ public:
         // performance.
         bool write_in_background;
 
+#ifdef IO_URING_ENABLED
         // This write must wait the result.
         bool synchronous_write;
+        // Write data through iouring.
+        bool write_through_ring;
+#endif
 
         WriteOptions()
             : id_wait(INVALID_BTHREAD_ID), abstime(NULL)
             , pipelined_count(0), auth_flags(0)
             , ignore_eovercrowded(false), write_in_background(false)
-            , synchronous_write(false) {}
+#ifdef IO_URING_ENABLED
+            , synchronous_write(false), write_through_ring(false) {}
+#else
+            {}
+#endif
     };
     int Write(butil::IOBuf *msg, const WriteOptions* options = NULL);
 

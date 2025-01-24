@@ -1109,7 +1109,6 @@ int Socket::Status(SocketId id, int32_t* nref) {
 }
 
 void Socket::OnRecycle() {
-    LOG(INFO) << "♻️♻️♻️Socket: " << *this << "OnRecycle";
     const bool create_by_connect = CreatedByConnect();
     if (_app_connect) {
         std::shared_ptr<AppConnect> tmp;
@@ -1827,9 +1826,10 @@ int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
         {
 #endif
 #ifdef IO_URING_ENABLED
+            // TODO(zkl): simply access tls_task_group
             bthread::TaskGroup *g =
                 bthread::TaskGroup::VolatileTLSTaskGroup();
-            if (g != nullptr) {
+            if (g != nullptr && (opt.write_through_ring || opt.synchronous_write)) {
                 io_uring_write_req_ = req;
                 req->data.prepare_iovecs(&iovecs_);
                 req->socket = this;
@@ -1851,10 +1851,12 @@ int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
                     }
                     iovecs_.clear();
                 }
+            } else {
+                nw = req->data.cut_into_file_descriptor(fd());
             }
-
-#endif
+#else
             nw = req->data.cut_into_file_descriptor(fd());
+#endif
         }
     }
     if (nw < 0) {
@@ -3120,7 +3122,6 @@ KEEPWRITE_IN_BACKGROUND:
     // KeepWrite will continue to reference the socket. So, releases the unique
     // pointer which does not decrement the reference count.
     (void) sock.release();
-    LOG(INFO) << "sock " << *this << " non-fixed write cb keep write.";
     if (bthread_start_background(&th, &BTHREAD_ATTR_NORMAL,
                                  KeepWrite, req) != 0) {
         LOG(FATAL) << "Fail to start KeepWrite";
@@ -3157,24 +3158,19 @@ void Socket::ProcessInbound() {
 void Socket::SetFixedWriteLen(uint32_t write_len) { write_len_ = write_len; }
 
 int Socket::WaitForNonFixedWrite() {
-    LOG(INFO) << "Socket: " << *this << " WaitForNonFixedWrite....";
     std::unique_lock lk(keep_write_mutex_);
     while (!write_finish_) {
         keep_write_cv_.wait(lk);
     }
     write_finish_ = false;
-    LOG(INFO) << "Socket: " << *this
-        << "WaitForNonFixedWrite Finishes, nw: " << keep_write_nw_;
     return keep_write_nw_;
 }
 
 void Socket::NotifyWaitingNonFixedWrite(int nw) {
-    LOG(INFO) << "Socket: " << *this << " NotifyWaitingNonFixedWrite....";
     std::unique_lock lk(keep_write_mutex_);
     write_finish_ = true;
     keep_write_nw_ = nw;
     keep_write_cv_.notify_one();
-    LOG(INFO) << "Socket: " << *this << " Notify finishes!!!";
 }
 #endif
 

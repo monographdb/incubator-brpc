@@ -235,6 +235,7 @@ ParseResult ParseRedisMessage(butil::IOBuf* source, Socket* socket,
         if (!sendbuf.empty()) {
             Socket::WriteOptions wopt;
             wopt.ignore_eovercrowded = true;
+            wopt.write_through_ring = true;
             LOG_IF(WARNING, socket->Write(&sendbuf, &wopt) != 0)
                 << "Fail to send redis reply";
         }

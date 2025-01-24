@@ -542,7 +542,6 @@ private:
             }
             case OpCode::RegisterFile: {
                 brpc::Socket *sock = reinterpret_cast<brpc::Socket *>(data >> 16);
-                LOG(INFO) << "Register file, sock: " << sock->id() << " fd: " << sock->fd();
                 if (cqe->res < 0) {
                     LOG(WARNING) << "IO uring file registration failed, errno: " << cqe->res
                         << ", group: " << task_group_->group_id_
@@ -716,7 +715,6 @@ private:
     }
 
     void HandleFixedWrite(brpc::Socket *sock, int nw, uint16_t write_buf_idx) {
-        LOG(INFO) << "HandleFixedWrite, socket: " << *sock << ", nw: " << nw;
         // Fixed write finished. Deferences the socket, until the write is retried.
         brpc::SocketUniquePtr sock_uptr(sock);
 
