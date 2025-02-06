@@ -42,7 +42,7 @@ public:
     }
 
     bool pop(bthread_t *task) {
-        if (!_tasks.is_empty() && _tasks.try_dequeue(*task)) {
+        if (_tasks.try_dequeue(*task)) {
             return true;
         }
         return false;

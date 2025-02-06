@@ -1201,14 +1201,14 @@ bool TaskGroup::NoTasks() {
 
 bool TaskGroup::wait(){
     _waiting.store(true, std::memory_order_release);
-    _waiting_workers.fetch_add(1, std::memory_order_release);
+    _waiting_workers.fetch_add(1, std::memory_order_relaxed);
     std::unique_lock<std::mutex> lk(_mux);
     bool woken_by_external = false;
     _cv.wait(lk, [this, &woken_by_external]()->bool {
         return !NoTasks() || _force_wakeup.load(std::memory_order_acquire);
     });
     _waiting.store(false, std::memory_order_release);
-    _waiting_workers.fetch_sub(1, std::memory_order_release);
+    _waiting_workers.fetch_sub(1, std::memory_order_relaxed);
 //    if (_force_wakeup) {
 //        LOG(INFO) << "group: " << group_id_ << " force wakeup";
 //    }
