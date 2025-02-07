@@ -261,8 +261,7 @@ public:
         CHECK(sock->iovecs_.size() <= IOV_MAX);
         io_uring_prep_writev(sqe, sfd, sock->iovecs_.data(), sock->iovecs_.size(),
                              0);
-        io_uring_prep_writev(sqe, sfd, sock->iovecs_.data(), sock->iovecs_.size(),
-                             0);
+
         uint64_t size = 0;
         std::string total_data;
         for (auto &iovec: sock->iovecs_) {
