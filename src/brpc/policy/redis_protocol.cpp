@@ -228,7 +228,7 @@ ParseResult ParseRedisMessage(butil::IOBuf* source, Socket* socket,
         }
 
         if (ring_buf_size == 0) {
-            LOG(INFO) << "Redis socket write not using fixed buffer.";
+            DLOG(INFO) << "Redis socket write not using fixed buffer.";
         }
 #endif
 

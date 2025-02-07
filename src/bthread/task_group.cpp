@@ -1254,6 +1254,18 @@ int TaskGroup::SocketWaitingNonFixedWrite(brpc::Socket *sock) {
     return sock->WaitForNonFixedWrite();
 }
 
+int TaskGroup::RingFsync(int fd) {
+    RingFsyncData args;
+    args.fd_ = fd;
+
+    int res = ring_listener_->SubmitFsync(&args);
+    if (res != 0) {
+        return -1;
+    }
+
+    return args.Wait();
+}
+
 const char *TaskGroup::GetRingReadBuf(uint16_t buf_id) {
   return ring_listener_->GetReadBuf(buf_id);
 }

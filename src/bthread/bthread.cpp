@@ -487,3 +487,15 @@ int bthread_start_from_bound_group(size_t g_seed, bthread_t *__restrict tid,
                                    void *(*fn)(void *), void *__restrict arg) {
   return bthread::start_from_bound_group(g_seed, tid, attr, fn, arg);
 }
+
+int bthread_fsync(int fd) {
+#ifdef IO_URING_ENABLED
+    bthread::TaskGroup* g = bthread::tls_task_group;
+    if (g == nullptr) {
+        return -1;
+    }
+    return g->RingFsync(fd);
+#else
+    return -1;
+#endif
+}

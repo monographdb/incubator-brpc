@@ -20,6 +20,29 @@ namespace bthread {
     extern BAIDU_THREAD_LOCAL TaskGroup *tls_task_group;
 }
 
+struct RingFsyncData {
+    int fd_;
+    bthread::Mutex mutex_;
+    bthread::ConditionVariable cv_;
+    bool finish_{false};
+    int res_{-1};
+
+    int Wait() {
+        std::unique_lock lk(mutex_);
+        while (!finish_) {
+            cv_.wait(lk);
+        }
+        return res_;
+    }
+
+    void Notify(int res) {
+        std::unique_lock lk(mutex_);
+        finish_ = true;
+        res_ = res;
+        cv_.notify_one();
+    }
+};
+
 class RingListener {
 public:
     RingListener(bthread::TaskGroup *group) : task_group_(group) {
@@ -317,6 +340,24 @@ public:
         return 0;
     }
 
+    int SubmitFsync(RingFsyncData *args) {
+        io_uring_sqe *sqe = io_uring_get_sqe(&ring_);
+        if (sqe == nullptr) {
+            LOG(ERROR)
+              << "IO uring submission queue is full for the ring listener, group: "
+              << task_group_->group_id_;
+            return -1;
+        }
+
+        io_uring_prep_fsync(sqe, args->fd_, 0);
+        uint64_t data = reinterpret_cast<uint64_t>(args);
+        data = data << 16;
+        data |= OpCodeToInt(OpCode::Fsync);
+        io_uring_sqe_set_data64(sqe, data);
+        ++submit_cnt_;
+        return 0;
+    }
+
     int SubmitAll() {
         if (submit_cnt_ == 0) {
             return 0;
@@ -597,6 +638,12 @@ private:
                 sock->NotifyWaitingNonFixedWrite(cqe->res);
                 break;
             }
+            case OpCode::Fsync: {
+                RingFsyncData *fsync_data = reinterpret_cast<RingFsyncData *>(data >> 16);
+                int res = cqe->res;
+                fsync_data->Notify(res);
+                break;
+            }
             default:
                 break;
         }
@@ -611,6 +658,7 @@ private:
         NonFixedWrite,
         NonFixedWriteFinish,
         WaitingNonFixedWrite,
+        Fsync,
         Noop = 255
     };
 
@@ -632,6 +680,8 @@ private:
                 return 6;
             case OpCode::WaitingNonFixedWrite:
                 return 7;
+            case OpCode::Fsync:
+                return 8;
             default:
                 return UINT8_MAX;
         }
@@ -655,6 +705,8 @@ private:
                 return OpCode::NonFixedWriteFinish;
             case 7:
                 return OpCode::WaitingNonFixedWrite;
+            case 8:
+                return OpCode::Fsync;
             default:
                 return OpCode::Noop;
         }
