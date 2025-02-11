@@ -81,6 +81,7 @@ void* TaskControl::worker_thread(void* arg) {
 
     tls_task_group = g;
     c->_nworkers << 1;
+    DLOG(INFO) << "brpc worker thread started, TaskGroup id: " << g->group_id_;
     g->run_main_task();
 
     stat = g->main_stat();

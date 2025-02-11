@@ -202,9 +202,9 @@ public:
     // process make go on indefinitely.
     void push_rq(bthread_t tid);
 
-    bool notify(bool force_wakeup = false);
+    bool notify(bool force_wakeup);
 
-    void TrySetExtTxProcFuncs();
+    bool TrySetExtTxProcFuncs();
 
     int group_id_{-1};
     // external tx processor functions. Only used with MonoRedis.

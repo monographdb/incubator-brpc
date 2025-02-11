@@ -34,6 +34,8 @@ extern std::function<std::tuple<std::function<void()>,
         std::function<bool()>>(int16_t)>
         get_tx_proc_functors;
 
+extern std::atomic<bool> tx_proc_functors_set;
+
 int bthread_set_ext_tx_prc_func(
         std::function<std::tuple<std::function<void()>,
                 std::function<void(int16_t)>,
@@ -41,6 +43,7 @@ int bthread_set_ext_tx_prc_func(
                 std::function<bool()>>(int16_t)> functors) {
     if (get_tx_proc_functors == nullptr) {
         get_tx_proc_functors = functors;
+        tx_proc_functors_set.store(true, std::memory_order_release);
         return 0;
     }
     return -1;
@@ -432,11 +435,11 @@ int bthread_block(void) {
 }
 
 int bthread_notify_worker(int group_id) {
-    bthread::TaskControl* c = bthread::get_or_new_task_control();
+    bthread::TaskControl* c = bthread::get_task_control();
     if (c == nullptr) {
         return 0;
     }
-    return c->signal_group(group_id);
+    return c->signal_group(group_id, true);
 }
 
 int bthread_set_worker_startfn(void (*start_fn)()) {

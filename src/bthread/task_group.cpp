@@ -41,10 +41,13 @@
 std::function<std::tuple<std::function<void()>,
         std::function<void(int16_t)>,
         std::function<bool(bool)>,
-        std::function<bool(void)>>(int16_t)>
-        get_tx_proc_functors;
+        std::function<bool()>>(int16_t)>
+        get_tx_proc_functors{nullptr};
+
+std::atomic<bool> tx_proc_functors_set{false};
 
 DEFINE_int32(steal_task_rnd, 100, "Steal task frequency in wait_task");
+DEFINE_bool(brpc_worker_as_ext_processor, false, "Work as external processor");
 
 namespace bthread {
 
@@ -136,7 +139,9 @@ bool TaskGroup::wait_task(bthread_t* tid) {
           return false;
         }
 
-        RunExtTxProcTask();
+        if (FLAGS_brpc_worker_as_ext_processor) {
+            RunExtTxProcTask();
+        }
 
         if (_rq.pop(tid) || _bound_rq.pop(tid) || _remote_rq.pop(tid)) {
             _processed_tasks++;
@@ -821,7 +826,7 @@ void TaskGroup::ready_to_run(bthread_t tid, bool nosignal) {
         _num_nosignal = 0;
         _nsignaled += 1 + additional_signal;
         _control->signal_task(1 + additional_signal);
-//        _control->signal_group(group_id_);
+        // _control->signal_group(group_id_);
     }
 }
 
@@ -1196,22 +1201,39 @@ bool TaskGroup::notify(bool force_wakeup) {
 }
 
 bool TaskGroup::NoTasks() {
+    // bool a = _remote_rq.empty();
+    // bool b = _bound_rq.empty();
+    // bool c = has_tx_processor_work_ == nullptr;
+    // bool d = (has_tx_processor_work_ == nullptr || !has_tx_processor_work_());
+    // LOG(INFO) << "group: " << group_id_ << ", " << a << " " << b << " " << c << " " << d
+    // << " NoTasks: " << (a && b && d);
+    // if (c) {
+    //     LOG(ERROR) << "👺👺👺group: " << group_id_ << ", has_tx_processor_work_ is nullptr";
+    // }
+    // return a && b && d;
     return _remote_rq.empty() && _bound_rq.empty() && (has_tx_processor_work_ == nullptr || !has_tx_processor_work_());
 }
 
 bool TaskGroup::wait(){
     _waiting.store(true, std::memory_order_release);
     _waiting_workers.fetch_add(1, std::memory_order_relaxed);
-    std::unique_lock<std::mutex> lk(_mux);
-    bool woken_by_external = false;
-    _cv.wait(lk, [this, &woken_by_external]()->bool {
-        return !NoTasks() || _force_wakeup.load(std::memory_order_acquire);
+    std::unique_lock lk(_mux);
+    _cv.wait(lk, [this]()->bool {
+        // LOG(INFO) << "group: " << group_id_ << " NoTasks: " << NoTasks();
+        if (has_tx_processor_work_ == nullptr) {
+            bool success = TrySetExtTxProcFuncs();
+            if (success) {
+                CHECK(update_ext_proc_ != nullptr);
+                update_ext_proc_(-1);
+            }
+        }
+        return _force_wakeup.load(std::memory_order_relaxed) || !NoTasks();
     });
     _waiting.store(false, std::memory_order_release);
     _waiting_workers.fetch_sub(1, std::memory_order_relaxed);
-//    if (_force_wakeup) {
-//        LOG(INFO) << "group: " << group_id_ << " force wakeup";
-//    }
+    // if (_force_wakeup) {
+    //     LOG(INFO) << "group: " << group_id_ << " force wakeup";
+    // }
     _force_wakeup.store(false, std::memory_order_relaxed);
     return true;
 }
@@ -1226,16 +1248,21 @@ void TaskGroup::RunExtTxProcTask() {
 }
 
 // Usually ExtTxProcFuncs is set in TaskGroup::wait_task
-void TaskGroup::TrySetExtTxProcFuncs() {
-    if (get_tx_proc_functors != nullptr && tx_processor_exec_ == nullptr) {
+bool TaskGroup::TrySetExtTxProcFuncs() {
+    if (FLAGS_brpc_worker_as_ext_processor && tx_processor_exec_ == nullptr &&
+            tx_proc_functors_set.load(std::memory_order_acquire)) {
         auto functors = get_tx_proc_functors(group_id_);
         tx_processor_exec_ = std::get<0>(functors);
         update_ext_proc_ = std::get<1>(functors);
         override_shard_heap_ = std::get<2>(functors);
         has_tx_processor_work_ = std::get<3>(functors);
 
+        // LOG(INFO) << "🧚🧚🧚group: " << group_id_ << ", set functors
+        // success";
         update_ext_proc_(1);
+        return true;
     }
+    return false;
 }
 
 }  // namespace bthread
