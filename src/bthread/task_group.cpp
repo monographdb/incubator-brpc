@@ -867,7 +867,7 @@ void TaskGroup::flush_nosignal_tasks_remote() {
     }
     _remote_num_nosignal.store(0);
     _remote_nsignaled.fetch_add(val);
-     _control->signal_task(val);
+    _control->signal_task(val);
     // _control->signal_group(group_id_);
 }
 
