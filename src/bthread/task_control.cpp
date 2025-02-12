@@ -81,7 +81,7 @@ void* TaskControl::worker_thread(void* arg) {
 
     tls_task_group = g;
     c->_nworkers << 1;
-    DLOG(INFO) << "brpc worker thread started, TaskGroup id: " << g->group_id_;
+    // LOG(INFO) << "brpc worker thread started, TaskGroup id: " << g->group_id_;
     g->run_main_task();
 
     stat = g->main_stat();
@@ -318,7 +318,6 @@ int TaskControl::_add_group(TaskGroup* g) {
         _ngroup.store(ngroup + 1, butil::memory_order_release);
         CHECK(_parking_lot_num.load() == int(_ngroup.load()));
     }
-    // LOG(INFO) << "add group id: " << ngroup;
     mu.unlock();
     // See the comments in _destroy_group
     // TODO: Not needed anymore since non-worker pthread cannot have TaskGroup
@@ -467,11 +466,6 @@ void TaskControl::signal_task(int num_task) {
 
 
 bool TaskControl::signal_group(int group_id, bool force_wakeup) {
-//    CHECK(group_id < _ngroup.load(std::memory_order_relaxed));
-//    bool success = _groups[group_id]->notify(force_wakeup);
-//    LOG(INFO) << "signal group: " << group_id << ", force wakeup: " << force_wakeup
-//        << " success: " << success;
-//    return success;
     return _groups[group_id]->notify(force_wakeup);
 }
 

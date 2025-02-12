@@ -149,7 +149,6 @@ bool TaskGroup::wait_task(bthread_t* tid) {
         }
 
         if (empty_rnd % FLAGS_steal_task_rnd == 0 && steal_from_others(tid)) {
-             // LOG(INFO) << "group: " << group_id_ << " steal_task success, tid: " << tid;
             return true;
         }
         empty_rnd++;
@@ -162,15 +161,7 @@ bool TaskGroup::wait_task(bthread_t* tid) {
                     update_ext_proc_(-1);
                 }
 
-                // auto before_wait = butil::cpuwide_time_us();
-                // LOG(INFO) << "group: " << group_id_ << "wait on cv, after polling for: "
-                //      << before_wait - poll_start_us << " us";
-
-                wait();
-
-                // auto after_wait = butil::cpuwide_time_us();
-                // LOG(INFO) << "group: " << group_id_ << "wakeup after sleep for: "
-                //     << after_wait - before_wait << " us";
+                Wait();
 
                 if (update_ext_proc_) {
                     update_ext_proc_(1);
@@ -583,7 +574,6 @@ int TaskGroup::start_from_dispatcher(bthread_t* __restrict th,
     }
     // From dispatcher, should never be nosignal, at least for now.
     CHECK(!(using_attr.flags & BTHREAD_NOSIGNAL));
-//    _control->signal_task(1);
     _control->signal_group(group_id_);
 
     return 0;
@@ -723,7 +713,6 @@ void TaskGroup::sched(TaskGroup** pg) {
 void TaskGroup::sched_to(TaskGroup** pg, TaskMeta* next_meta) {
     CHECK(next_meta->bound_task_group == nullptr || next_meta->bound_task_group == *pg);
     TaskGroup* g = *pg;
-    // LOG(INFO) << "group: " << (*pg)->group_id_ << ", sched to tid: " << next_meta->tid;
 
 #ifndef NDEBUG
     if ((++g->_sched_recursive_guard) > 1) {
@@ -817,7 +806,6 @@ void TaskGroup::destroy_self() {
 }
 
 void TaskGroup::ready_to_run(bthread_t tid, bool nosignal) {
-    // LOG(INFO) << "group: " << group_id_ << " ready to run, nosignal: " << nosignal;
     push_rq(tid);
     if (nosignal) {
         ++_num_nosignal;
@@ -836,13 +824,12 @@ void TaskGroup::flush_nosignal_tasks() {
         _num_nosignal = 0;
         _nsignaled += val;
         _control->signal_task(val);
-//        _control->signal_group(group_id_);
+        // _control->signal_group(group_id_);
     }
 }
 
 void TaskGroup::ready_to_run_remote(bthread_t tid, bool nosignal) {
-//    CHECK(address_meta(tid)->bound_task_group == nullptr);
-    // LOG(INFO) << "ready to run remote into group: " << group_id_ << ", nosignal: " << nosignal << ", tid: " << tid;
+    // CHECK(address_meta(tid)->bound_task_group == nullptr);
     while (!_remote_rq.push(tid)) {
         flush_nosignal_tasks_remote();
         LOG_EVERY_SECOND(ERROR)
@@ -856,7 +843,7 @@ void TaskGroup::ready_to_run_remote(bthread_t tid, bool nosignal) {
         _remote_num_nosignal.store(0, std::memory_order_release);
         _remote_nsignaled.fetch_add(additional_signal, std::memory_order_release);
         _control->signal_task(1 + additional_signal);
-//        _control->signal_group(group_id_);
+        // _control->signal_group(group_id_);
     }
 }
 
@@ -1194,32 +1181,20 @@ bool TaskGroup::notify(bool force_wakeup) {
     if (!_waiting.load(std::memory_order_acquire)) {
         return false;
     }
-    // LOG(INFO) << "notifying waiting group: " << group_id_;
     std::unique_lock<std::mutex> lk(_mux);
     _cv.notify_one();
     return true;
 }
 
 bool TaskGroup::NoTasks() {
-    // bool a = _remote_rq.empty();
-    // bool b = _bound_rq.empty();
-    // bool c = has_tx_processor_work_ == nullptr;
-    // bool d = (has_tx_processor_work_ == nullptr || !has_tx_processor_work_());
-    // LOG(INFO) << "group: " << group_id_ << ", " << a << " " << b << " " << c << " " << d
-    // << " NoTasks: " << (a && b && d);
-    // if (c) {
-    //     LOG(ERROR) << "👺👺👺group: " << group_id_ << ", has_tx_processor_work_ is nullptr";
-    // }
-    // return a && b && d;
     return _remote_rq.empty() && _bound_rq.empty() && (has_tx_processor_work_ == nullptr || !has_tx_processor_work_());
 }
 
-bool TaskGroup::wait(){
+bool TaskGroup::Wait(){
     _waiting.store(true, std::memory_order_release);
     _waiting_workers.fetch_add(1, std::memory_order_relaxed);
     std::unique_lock<std::mutex> lk(_mux);
     _cv.wait(lk, [this]()->bool {
-        // LOG(INFO) << "group: " << group_id_ << " NoTasks: " << NoTasks();
         if (has_tx_processor_work_ == nullptr) {
             bool success = TrySetExtTxProcFuncs();
             if (success) {
@@ -1231,9 +1206,6 @@ bool TaskGroup::wait(){
     });
     _waiting.store(false, std::memory_order_release);
     _waiting_workers.fetch_sub(1, std::memory_order_relaxed);
-    // if (_force_wakeup) {
-    //     LOG(INFO) << "group: " << group_id_ << " force wakeup";
-    // }
     _force_wakeup.store(false, std::memory_order_relaxed);
     return true;
 }
@@ -1257,8 +1229,6 @@ bool TaskGroup::TrySetExtTxProcFuncs() {
         override_shard_heap_ = std::get<2>(functors);
         has_tx_processor_work_ = std::get<3>(functors);
 
-        // LOG(INFO) << "🧚🧚🧚group: " << group_id_ << ", set functors
-        // success";
         update_ext_proc_(1);
         return true;
     }

@@ -266,7 +266,7 @@ public:
 
     bool NoTasks();
 
-    bool wait();
+    bool Wait();
 
     void RunExtTxProcTask();
 
