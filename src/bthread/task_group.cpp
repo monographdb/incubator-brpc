@@ -1217,7 +1217,7 @@ bool TaskGroup::NoTasks() {
 bool TaskGroup::wait(){
     _waiting.store(true, std::memory_order_release);
     _waiting_workers.fetch_add(1, std::memory_order_relaxed);
-    std::unique_lock lk(_mux);
+    std::unique_lock<std::mutex> lk(_mux);
     _cv.wait(lk, [this]()->bool {
         // LOG(INFO) << "group: " << group_id_ << " NoTasks: " << NoTasks();
         if (has_tx_processor_work_ == nullptr) {
