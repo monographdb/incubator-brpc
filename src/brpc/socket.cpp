@@ -3093,7 +3093,6 @@ std::string Socket::description() const {
 void Socket::RingNonFixedWriteCb(int nw) {
     // Deferences the socket if the write request finishes.
     SocketUniquePtr sock(this);
-    LOG(INFO) << "Socket: " << *this << " RingNonFixedWriteCb gets nw: " << nw;
 
     WriteRequest *req = io_uring_write_req_;
     CHECK(req->socket == this);
