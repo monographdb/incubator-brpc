@@ -3153,6 +3153,7 @@ void Socket::ProcessInbound() {
   attr.keytable_pool = _keytable_pool;
   bthread::TaskGroup *cur_group = bthread::TaskGroup::VolatileTLSTaskGroup();
   CHECK(bound_g_ == cur_group) << "cur_group: " << cur_group << " bound_g_: " << bound_g_;
+  // TODO(zkl): No need to signal itself
   if (bthread_start_from_bound_group(cur_group->group_id_, &tid, &attr, SocketProcess, this) != 0) {
     LOG(FATAL) << "Fail to start SocketProcess";
     SocketProcess(this);

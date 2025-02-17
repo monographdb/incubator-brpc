@@ -171,7 +171,7 @@ bool TaskGroup::wait_task(bthread_t* tid) {
             return true;
         }
 #ifdef IO_URING_ENABLED
-        // else if (cnt > 0 || ring_poll_cnt > 0) {
+        // if (cnt > 0 || ring_poll_cnt > 0) {
         //     empty_rnd = 0;
         //     continue;
         // }
@@ -1245,7 +1245,12 @@ bool TaskGroup::notify() {
 }
 
 bool TaskGroup::NoTasks() {
-    return _remote_rq.empty() && _bound_rq.empty() && (has_tx_processor_work_ == nullptr || !has_tx_processor_work_());
+    bool no_external_task = has_tx_processor_work_ == nullptr || !has_tx_processor_work_();
+    bool no_ring_task = true;
+#ifdef IO_URING_ENABLED
+    no_ring_task = !ring_listener_->HasJobsToSubmit();
+#endif
+    return _remote_rq.empty() && _bound_rq.empty() && no_ring_task && no_external_task;
 }
 
 bool TaskGroup::Wait(){
@@ -1373,8 +1378,7 @@ bool TaskGroup::EnqueueInboundRingBuf(brpc::Socket *sock, int32_t bytes,
                                       uint16_t bid, bool rearm) {
   bool success =
       inbound_queue_.TryEnqueue(InboundRingBuf(sock, bytes, bid, rearm));
-  _remote_num_nosignal.fetch_add(1, std::memory_order_relaxed);
-  flush_nosignal_tasks_remote();
+  _control->signal_group(group_id_, true);
   return success;
 }
 

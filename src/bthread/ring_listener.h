@@ -357,6 +357,10 @@ public:
         return 0;
     }
 
+    bool HasJobsToSubmit() const {
+        return submit_cnt_ > 0;
+    }
+
     int SubmitAll() {
         if (submit_cnt_ == 0) {
             return 0;
@@ -383,17 +387,19 @@ public:
             LOG(ERROR) << "Listener uring wait errno: " << ret;
             return;
         }
+        bthread_notify_worker(task_group_->group_id_);
+        return;
 
-        int processed = 0;
-        unsigned int head;
-        io_uring_for_each_cqe(&ring_, head, cqe) {
-            HandleCqe(cqe, false);
-            ++processed;
-        }
-
-        if (processed > 0) {
-            io_uring_cq_advance(&ring_, processed);
-        }
+        // int processed = 0;
+        // unsigned int head;
+        // io_uring_for_each_cqe(&ring_, head, cqe) {
+        //     HandleCqe(cqe, false);
+        //     ++processed;
+        // }
+        //
+        // if (processed > 0) {
+        //     io_uring_cq_advance(&ring_, processed);
+        // }
     }
 
     size_t ExtPoll() {
@@ -768,6 +774,7 @@ private:
         brpc::SocketUniquePtr sock_uptr(sock);
 
         if (nw >= 0) {
+            CHECK(sock->write_len_ >= nw);
             sock->write_len_ -= nw;
             if (sock->write_len_ == 0) {
                 // Data fully written, recycle the write buffer.
