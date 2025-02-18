@@ -59,6 +59,7 @@
 #endif
 
 DEFINE_bool(dispatch_lazily, false, "dispatcher lazily creates task");
+DEFINE_bool(use_io_uring, false, "Use IO URING to do the polling.");
 
 namespace bthread {
 size_t __attribute__((weak))
@@ -596,7 +597,8 @@ int Socket::ResetFileDescriptor(int fd, size_t bound_gid) {
 
     if (_on_edge_triggered_events) {
 #ifdef IO_URING_ENABLED
-      if (_on_edge_triggered_events == InputMessenger::OnNewMessagesFromRing) {
+      if (FLAGS_use_io_uring &&
+        _on_edge_triggered_events == InputMessenger::OnNewMessagesFromRing) {
         bthread_attr_t attr;
         attr = BTHREAD_ATTR_NORMAL;
 
@@ -1135,7 +1137,7 @@ void Socket::OnRecycle() {
     if (ValidFileDescriptor(prev_fd)) {
         if (_on_edge_triggered_events != NULL) {
 #ifdef IO_URING_ENABLED
-            if (bound_g_ != nullptr) {
+            if (FLAGS_use_io_uring && bound_g_ != nullptr) {
                 bthread_attr_t attr = BTHREAD_ATTR_NORMAL;
                 bthread_t tid;
                 intptr_t arg = prev_fd;
@@ -1829,8 +1831,9 @@ int Socket::StartWrite(WriteRequest* req, const WriteOptions& opt) {
 #endif
 #ifdef IO_URING_ENABLED
             // TODO(zkl): simply access tls_task_group
-            bthread::TaskGroup *g =
-                bthread::TaskGroup::VolatileTLSTaskGroup();
+            bthread::TaskGroup *g = FLAGS_use_io_uring
+                                        ? bthread::TaskGroup::VolatileTLSTaskGroup()
+                                        : nullptr;
             if (g != nullptr && (opt.write_through_ring || opt.synchronous_write)) {
                 io_uring_write_req_ = req;
                 req->data.prepare_iovecs(&iovecs_);
@@ -1978,7 +1981,7 @@ void* Socket::KeepWrite(void* void_arg) {
                 g_vars->nwaitepollout << 1;
                 bool pollin = (s->_on_edge_triggered_events != NULL);
 #ifdef IO_URING_ENABLED
-                if (s->bound_g_ != nullptr) {
+                if (FLAGS_use_io_uring && s->bound_g_ != nullptr) {
                     // Only set pollout since the socket is already listened by RingListener.
                     pollin = false;
                 }
@@ -2031,25 +2034,30 @@ ssize_t Socket::DoWrite(WriteRequest* req) {
             }
 #endif
 #ifdef IO_URING_ENABLED
-            butil::IOBuf::cut_multiple_into_iovecs(&iovecs_, data_list, ndata);
-            // Submit write into the iouring and wait for the result
-            bthread::TaskGroup *g =
-                    bthread::TaskGroup::VolatileTLSTaskGroup();
-            int nw = g->SocketWaitingNonFixedWrite(this);
-            if (nw < 0) {
-                LOG(ERROR) << "WaitForNonFixedWrite return nw: " << nw << ", socket: " << *this;
-                errno = -nw;
-                return nw;
-            }
-            size_t npop_all = nw;
-            for (size_t i = 0; i < ndata; ++i) {
-                npop_all -= data_list[i]->pop_front(npop_all);
-                if (npop_all == 0) {
-                    break;
+            if (FLAGS_use_io_uring) {
+                butil::IOBuf::cut_multiple_into_iovecs(&iovecs_, data_list, ndata);
+                // Submit write into the iouring and wait for the result
+                bthread::TaskGroup *g =
+                        bthread::TaskGroup::VolatileTLSTaskGroup();
+                int nw = g->SocketWaitingNonFixedWrite(this);
+                if (nw < 0) {
+                    LOG(ERROR) << "WaitForNonFixedWrite return nw: " << nw << ", socket: " << *this;
+                    errno = -nw;
+                    return nw;
                 }
-            }
+                size_t npop_all = nw;
+                for (size_t i = 0; i < ndata; ++i) {
+                    npop_all -= data_list[i]->pop_front(npop_all);
+                    if (npop_all == 0) {
+                        break;
+                    }
+                }
 
-            return nw;
+                return nw;
+            } else {
+                return butil::IOBuf::cut_multiple_into_file_descriptor(
+                    fd(), data_list, ndata);
+            }
 #else
             return butil::IOBuf::cut_multiple_into_file_descriptor(
                 fd(), data_list, ndata);

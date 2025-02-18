@@ -28,6 +28,8 @@
 #include "bthread/list_of_abafree_id.h"
 #include "bthread/bthread.h"
 
+DECLARE_bool(use_io_uring);
+
 extern std::function<std::tuple<std::function<void()>,
         std::function<void(int16_t)>,
         std::function<bool(bool)>,
@@ -525,7 +527,8 @@ int bthread_start_from_bound_group(size_t g_seed, bthread_t *__restrict tid,
 
 int bthread_fsync(int fd) {
 #ifdef IO_URING_ENABLED
-    bthread::TaskGroup* g = bthread::tls_task_group;
+    bthread::TaskGroup *g =
+        FLAGS_use_io_uring ? bthread::tls_task_group : nullptr;
     if (g == nullptr) {
         return -1;
     }

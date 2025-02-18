@@ -53,6 +53,7 @@ std::atomic<bool> tx_proc_functors_set{false};
 
 DEFINE_int32(steal_task_rnd, 100, "Steal task frequency in wait_task");
 DEFINE_bool(brpc_worker_as_ext_processor, false, "Work as external processor");
+DECLARE_bool(use_io_uring);
 
 namespace bthread {
 
@@ -145,7 +146,7 @@ bool TaskGroup::wait_task(bthread_t* tid) {
         }
 
 #ifdef IO_URING_ENABLED
-        if (ring_listener_ != nullptr) {
+        if (FLAGS_use_io_uring && ring_listener_ != nullptr) {
             ring_listener_->SubmitAll();
         }
 #endif
@@ -155,14 +156,16 @@ bool TaskGroup::wait_task(bthread_t* tid) {
         }
 
 #ifdef IO_URING_ENABLED
-        size_t ring_poll_cnt = ring_listener_->ExtPoll();
+        if (FLAGS_use_io_uring && ring_listener_ != nullptr) {
+            size_t ring_poll_cnt = ring_listener_->ExtPoll();
 
-        size_t cnt = inbound_queue_.TryDequeueBulk(inbound_batch_.begin(),
-                                                   inbound_batch_.size());
-        for (size_t idx = 0; idx < cnt; ++idx) {
-          InboundRingBuf &rbuf = inbound_batch_[idx];
-          brpc::Socket *sock = rbuf.sock_;
-          brpc::Socket::SocketResume(sock, rbuf, this);
+            size_t cnt = inbound_queue_.TryDequeueBulk(inbound_batch_.begin(),
+                                                       inbound_batch_.size());
+            for (size_t idx = 0; idx < cnt; ++idx) {
+                InboundRingBuf &rbuf = inbound_batch_[idx];
+                brpc::Socket *sock = rbuf.sock_;
+                brpc::Socket::SocketResume(sock, rbuf, this);
+            }
         }
 #endif
 
@@ -202,7 +205,9 @@ bool TaskGroup::wait_task(bthread_t* tid) {
                 }
 
 #ifdef IO_URING_ENABLED
-                ring_listener_->ExtWakeup();
+                if (FLAGS_use_io_uring && ring_listener_ != nullptr) {
+                    ring_listener_->ExtWakeup();
+                }
 #endif
                 Wait();
 
@@ -340,11 +345,13 @@ int TaskGroup::init(size_t runqueue_capacity) {
     _main_stack = stk;
     _last_run_ns = butil::cpuwide_time_ns();
 #ifdef IO_URING_ENABLED
-    ring_listener_ = std::make_unique<RingListener>(this);
-    int ret = ring_listener_->Init();
-    if (ret) {
-      LOG(ERROR) << "Failed to initialize the IO uring listener.";
-      ring_listener_ = nullptr;
+    if (FLAGS_use_io_uring) {
+        ring_listener_ = std::make_unique<RingListener>(this);
+        int ret = ring_listener_->Init();
+        if (ret) {
+            LOG(ERROR) << "Failed to initialize the IO uring listener.";
+            ring_listener_ = nullptr;
+        }
     }
 #endif
     return 0;
@@ -1248,7 +1255,7 @@ bool TaskGroup::NoTasks() {
     bool no_external_task = has_tx_processor_work_ == nullptr || !has_tx_processor_work_();
     bool no_ring_task = true;
 #ifdef IO_URING_ENABLED
-    no_ring_task = !ring_listener_->HasJobsToSubmit();
+    no_ring_task = !FLAGS_use_io_uring || !ring_listener_->HasJobsToSubmit();
 #endif
     return _remote_rq.empty() && _bound_rq.empty() && no_ring_task && no_external_task;
 }
