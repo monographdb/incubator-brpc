@@ -9,7 +9,7 @@ namespace bthread {
 
 class BrpcModule {
 
-}
+};
 
 }  // namespace bthread
 
