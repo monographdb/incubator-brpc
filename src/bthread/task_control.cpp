@@ -474,7 +474,7 @@ void TaskControl::signal_task(int num_task) {
 
 
 bool TaskControl::signal_group(int group_id) {
-    return _groups[group_id]->notify();
+    return _groups[group_id]->Notify();
 }
 
 void TaskControl::print_rq_sizes(std::ostream& os) {

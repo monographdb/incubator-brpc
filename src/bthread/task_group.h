@@ -216,7 +216,7 @@ public:
     // process make go on indefinitely.
     void push_rq(bthread_t tid);
 
-    bool notify();
+    bool Notify();
 
     bool TrySetExtTxProcFuncs();
 
@@ -228,6 +228,7 @@ public:
     std::function<bool()> has_tx_processor_work_{nullptr};
 
 #ifdef IO_URING_ENABLED
+    bool RingListenerNotify();
     int RegisterSocket(brpc::Socket *sock);
     void UnregisterSocket(int fd);
     void SocketRecv(brpc::Socket *sock);
@@ -338,6 +339,7 @@ public:
     std::condition_variable _cv;
 
 #ifdef IO_URING_ENABLED
+    std::atomic<bool> signaled_by_ring_{false};
     std::unique_ptr<RingListener> ring_listener_{nullptr};
     eloq::SpscQueue<InboundRingBuf> inbound_queue_;
     std::array<InboundRingBuf, 128> inbound_batch_;

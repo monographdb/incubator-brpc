@@ -1242,7 +1242,7 @@ void print_task(std::ostream& os, bthread_t tid) {
     }
 }
 
-bool TaskGroup::notify() {
+bool TaskGroup::Notify() {
     if (!_waiting.load(std::memory_order_acquire)) {
         return false;
     }
@@ -1252,12 +1252,21 @@ bool TaskGroup::notify() {
 }
 
 bool TaskGroup::NoTasks() {
-    bool no_external_task = has_tx_processor_work_ == nullptr || !has_tx_processor_work_();
-    bool no_ring_task = true;
+    bool has_external_task =
+        has_tx_processor_work_ != nullptr && has_tx_processor_work_();
+    bool has_ring_task = false;
 #ifdef IO_URING_ENABLED
-    no_ring_task = !FLAGS_use_io_uring || !ring_listener_->HasJobsToSubmit();
+    if (FLAGS_use_io_uring) {
+        bool has_jobs_to_submit = ring_listener_ != nullptr && ring_listener_->HasJobsToSubmit();
+        bool wakeup_by_ring_listener = signaled_by_ring_.load(std::memory_order_relaxed);
+        if (wakeup_by_ring_listener) {
+            signaled_by_ring_.store(false, std::memory_order_relaxed);
+        }
+        has_ring_task = has_jobs_to_submit || wakeup_by_ring_listener;
+    }
 #endif
-    return _remote_rq.empty() && _bound_rq.empty() && no_ring_task && no_external_task;
+    return _remote_rq.empty() && _bound_rq.empty() && !has_ring_task &&
+           !has_external_task;
 }
 
 bool TaskGroup::Wait(){
@@ -1280,6 +1289,9 @@ bool TaskGroup::Wait(){
         }
         return !NoTasks();
     });
+#ifdef IO_URING_ENABLED
+    signaled_by_ring_.store(false, std::memory_order_relaxed);
+#endif
     _waiting.store(false, std::memory_order_release);
     _waiting_workers.fetch_sub(1, std::memory_order_relaxed);
     return true;
@@ -1311,6 +1323,11 @@ bool TaskGroup::TrySetExtTxProcFuncs() {
 }
 
 #ifdef IO_URING_ENABLED
+bool TaskGroup::RingListenerNotify() {
+    signaled_by_ring_.store(true, std::memory_order_relaxed);
+    return Notify();
+}
+
 int TaskGroup::RegisterSocket(brpc::Socket *sock) {
     return ring_listener_->Register(sock);
 }
@@ -1385,7 +1402,7 @@ bool TaskGroup::EnqueueInboundRingBuf(brpc::Socket *sock, int32_t bytes,
                                       uint16_t bid, bool rearm) {
   bool success =
       inbound_queue_.TryEnqueue(InboundRingBuf(sock, bytes, bid, rearm));
-  _control->signal_group(group_id_, true);
+  _control->signal_group(group_id_);
   return success;
 }
 

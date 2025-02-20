@@ -380,26 +380,14 @@ public:
 
     void Unregister(int fd) { SubmitCancel(fd); }
 
-    void Poll() {
+    void PollAndNotify() {
         io_uring_cqe *cqe = nullptr;
         int ret = io_uring_wait_cqe(&ring_, &cqe);
         if (ret < 0) {
             LOG(ERROR) << "Listener uring wait errno: " << ret;
             return;
         }
-        bthread_notify_worker(task_group_->group_id_);
-        return;
-
-        // int processed = 0;
-        // unsigned int head;
-        // io_uring_for_each_cqe(&ring_, head, cqe) {
-        //     HandleCqe(cqe, false);
-        //     ++processed;
-        // }
-        //
-        // if (processed > 0) {
-        //     io_uring_cq_advance(&ring_, processed);
-        // }
+        task_group_->RingListenerNotify();
     }
 
     size_t ExtPoll() {
@@ -438,6 +426,9 @@ public:
 
     void ExtWakeup() {
         has_external_.store(false, std::memory_order_relaxed);
+        if (poll_status_.load(std::memory_order_relaxed) != PollStatus::Sleep) {
+            return;
+        }
         std::unique_lock<std::mutex> lk(mux_);
         cv_.notify_one();
     }
@@ -446,28 +437,20 @@ public:
         while (poll_status_.load(std::memory_order_relaxed) != PollStatus::Closed) {
             if (reg_cnt_.load(std::memory_order_acquire) > 0 &&
                 !has_external_.load(std::memory_order_relaxed)) {
-                Poll();
-            } else {
-                PollStatus sta = PollStatus::Active;
-                if (poll_status_.compare_exchange_strong(sta, PollStatus::Sleep,
+                PollStatus status = PollStatus::Sleep;
+                if (poll_status_.compare_exchange_strong(status, PollStatus::Active,
                                                          std::memory_order_acq_rel)) {
-                    std::unique_lock<std::mutex> lk(mux_);
-                    cv_.wait(lk, [this]() {
-                        return (reg_cnt_.load(std::memory_order_acquire) > 0 &&
-                                !has_external_.load(std::memory_order_relaxed)) ||
-                               poll_status_.load(std::memory_order_relaxed) ==
-                               PollStatus::Closed;
-                    });
-                    // LOG(INFO) << "External ring listener wakes";
-
-                    sta = PollStatus::Sleep;
-                    // If the poll thread is woken up due to new inbound messages, sets
-                    // the polling status to active. Or, the polling status must be
-                    // closed.
-                    poll_status_.compare_exchange_strong(sta, PollStatus::Active,
-                                                         std::memory_order_acq_rel);
+                    PollAndNotify();
                 }
             }
+            poll_status_.store(PollStatus::Sleep, std::memory_order_acq_rel);
+            std::unique_lock<std::mutex> lk(mux_);
+            cv_.wait(lk, [this]() {
+                return (reg_cnt_.load(std::memory_order_acquire) > 0 &&
+                        !has_external_.load(std::memory_order_relaxed)) ||
+                       poll_status_.load(std::memory_order_relaxed) ==
+                       PollStatus::Closed;
+            });
         }
     }
 
