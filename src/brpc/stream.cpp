@@ -285,6 +285,7 @@ void Stream::TriggerOnConnectIfNeed() {
 int Stream::AppendIfNotFull(const butil::IOBuf &data,
                             const StreamWriteOptions* options) {
     if (_cur_buf_size > 0) {
+        // TODO(zkl): fix lock
         std::unique_lock<bthread_mutex_t> lck(_congestion_control_mutex);
         if (_produced >= _remote_consumed + _cur_buf_size) {
             const size_t saved_produced = _produced;
